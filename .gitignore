@@ -44,3 +44,4 @@ example
 .env.eas-simulator
 .claude/
 .secrets/
+.build-out/
