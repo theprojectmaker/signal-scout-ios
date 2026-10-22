@@ -1,0 +1,64 @@
+{
+  "expo": {
+    "name": "Signal Scout",
+    "slug": "signal-scout",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "signalscout",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#0b0f17",
+    "ios": {
+      "bundleIdentifier": "com.solyapps.signalscout",
+      "supportsTablet": true,
+      "requireFullScreen": false,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.solyapps.signalscout",
+      "adaptiveIcon": {
+        "backgroundColor": "#0b0f17",
+        "foregroundImage": "./assets/images/adaptive-icon.png"
+      },
+      "permissions": []
+    },
+    "web": {
+      "output": "single",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0b0f17",
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 140
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#34C759"
+        }
+      ],
+      "expo-status-bar"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    },
+    "owner": "solomonsasson",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "e17cf64c-38e6-4161-90c7-44f1ff546fea"
+      }
+    }
+  }
+}
