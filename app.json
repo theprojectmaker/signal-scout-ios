@@ -45,7 +45,17 @@
           "color": "#34C759"
         }
       ],
-      "expo-status-bar"
+      "expo-status-bar",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "17.0"
+          }
+        }
+      ],
+      "@kesha-antonov/react-native-background-downloader",
+      "react-native-blob-util"
     ],
     "experiments": {
       "typedRoutes": false
