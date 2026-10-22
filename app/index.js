@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   View, Text, ScrollView, Pressable, StyleSheet, Platform,
-  Modal, TextInput, LayoutAnimation, UIManager, useColorScheme,
+  Modal, TextInput, LayoutAnimation, UIManager, useColorScheme, Animated, Easing,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Circle } from 'react-native-svg';
+import Svg, { Circle, Polyline, Line } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const STORE = 'scout.spots.v1';
+const HISTORY_MAX = 32;
+const PING_TIMEOUT = 3000;
+const DOWN_TIMEOUT = 6000;
+const DOWN_BYTES = 160000; // lighter than before: fast + saves data
+const CYCLE_GAP = 800;
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -29,7 +34,7 @@ function useTheme() {
   }, [dark]);
 }
 
-/* ---------------- scoring ---------------- */
+/* ---------------- scoring + measurement ---------------- */
 const band = (s) => (s >= 67 ? 'green' : s >= 34 ? 'orange' : 'red');
 const bandColor = (t, s) => t[band(s)];
 const word = (s) =>
@@ -41,24 +46,31 @@ function scoreOf(pingMs, mbps) {
   const score = mbps > 0 ? Math.round(p * 0.45 + s * 0.55) : Math.round(p);
   return Math.max(0, Math.min(100, score));
 }
-async function pingTest(n = 4) {
+
+// fetch that can never hang — aborts after `ms`
+function fetchT(url, ms) {
+  const ac = new AbortController();
+  const to = setTimeout(() => ac.abort(), ms);
+  return fetch(url, { cache: 'no-store', signal: ac.signal }).finally(() => clearTimeout(to));
+}
+async function pingTest(n = 3) {
   let best = Infinity;
   for (let i = 0; i < n; i++) {
     const t = Date.now();
     try {
-      await fetch('https://speed.cloudflare.com/__down?bytes=0&r=' + Math.random(), { cache: 'no-store' });
+      await fetchT('https://speed.cloudflare.com/__down?bytes=0&r=' + Math.random(), PING_TIMEOUT);
       best = Math.min(best, Date.now() - t);
-    } catch (e) { return Infinity; }
+    } catch (e) { /* timed out or failed — try the next */ }
   }
   return best;
 }
-async function downloadTest(bytes = 800000) {
+async function downloadTest() {
   const t = Date.now();
   try {
-    const r = await fetch('https://speed.cloudflare.com/__down?bytes=' + bytes + '&r=' + Math.random(), { cache: 'no-store' });
+    const r = await fetchT('https://speed.cloudflare.com/__down?bytes=' + DOWN_BYTES + '&r=' + Math.random(), DOWN_TIMEOUT);
     const buf = await r.arrayBuffer();
     const sec = (Date.now() - t) / 1000;
-    return (buf.byteLength * 8) / sec / 1e6;
+    return sec > 0 ? (buf.byteLength * 8) / sec / 1e6 : 0;
   } catch (e) { return 0; }
 }
 async function measure() {
@@ -83,12 +95,11 @@ const haptic = (kind) => {
 };
 
 /* ---------------- gauge ---------------- */
-function Gauge({ t, score, offline, active }) {
-  const size = 216, stroke = 14, r = (size - stroke) / 2, c = size / 2;
+function Gauge({ t, score, offline, idle, pulse }) {
+  const size = 212, stroke = 14, r = (size - stroke) / 2, c = size / 2;
   const circ = 2 * Math.PI * r;
-  const idle = !offline && !active && !score;
-  const pct = offline ? 0 : score / 100;
   const col = offline ? t.red : idle ? t.label2 : bandColor(t, score);
+  const pct = offline || idle ? 0 : score / 100;
   return (
     <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
       <Svg width={size} height={size}>
@@ -99,18 +110,19 @@ function Gauge({ t, score, offline, active }) {
           strokeDashoffset={circ * (1 - pct)} transform={`rotate(-90 ${c} ${c})`}
         />
       </Svg>
-      <View style={{ position: 'absolute', alignItems: 'center' }}>
-        <Text style={{ fontSize: 60, fontWeight: '700', letterSpacing: -2, color: offline ? t.red : t.label, lineHeight: 64 }}>
-          {offline ? '0' : (active || score ? score : '—')}
+      <Animated.View style={{ position: 'absolute', alignItems: 'center', transform: [{ scale: pulse }] }}>
+        <Text style={{ fontSize: 60, fontWeight: '700', letterSpacing: -2, color: offline ? t.red : idle ? t.label2 : t.label, lineHeight: 64 }}>
+          {offline ? '0' : idle ? '—' : score}
         </Text>
         <Text style={{ fontSize: 15, fontWeight: '600', color: col, marginTop: 2 }}>
-          {offline ? 'No connection' : (active || score ? word(score) : 'Ready')}
+          {offline ? 'No connection' : idle ? 'Ready' : word(score)}
         </Text>
         <Text style={{ fontSize: 12, color: t.label3, marginTop: 3 }}>out of 100</Text>
-      </View>
+      </Animated.View>
     </View>
   );
 }
+
 function Signal({ t, score, size = 1 }) {
   const col = bandColor(t, score);
   const lit = Math.ceil(score / 20);
@@ -123,6 +135,30 @@ function Signal({ t, score, size = 1 }) {
   );
 }
 
+/* live trend sparkline of recent scores */
+function Sparkline({ t, history, color }) {
+  const W = 300, H = 44, pad = 3;
+  if (history.length < 2) {
+    return <View style={{ height: H, alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={{ color: t.label3, fontSize: 12.5 }}>Start scanning to see your signal over time</Text>
+    </View>;
+  }
+  const n = history.length;
+  const stepX = (W - pad * 2) / (HISTORY_MAX - 1);
+  const pts = history.map((v, i) => {
+    const x = pad + (HISTORY_MAX - n + i) * stepX;
+    const y = pad + (1 - v / 100) * (H - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const midY = pad + (1 - 0.5) * (H - pad * 2);
+  return (
+    <Svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+      <Line x1={0} y1={midY} x2={W} y2={midY} stroke={t.sep} strokeWidth={1} strokeDasharray="3 4" />
+      <Polyline points={pts} fill="none" stroke={color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
+    </Svg>
+  );
+}
+
 /* ---------------- screen ---------------- */
 export default function Screen() {
   const t = useTheme();
@@ -130,7 +166,11 @@ export default function Screen() {
   const insets = useSafeAreaInsets();
 
   const [scanning, setScanning] = useState(false);
+  const [measuring, setMeasuring] = useState(false);
   const [reading, setReading] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [lastAt, setLastAt] = useState(0);
+  const [now, setNow] = useState(Date.now());
   const [spots, setSpots] = useState([]);
   const [showTips, setShowTips] = useState(false);
   const [naming, setNaming] = useState(false);
@@ -138,14 +178,33 @@ export default function Screen() {
   const [toast, setToast] = useState('');
 
   const scanRef = useRef(false);
+  const seqRef = useRef(0);
   const timerRef = useRef(null);
   const lastBandRef = useRef(null);
   const toastTimer = useRef(null);
+  const pulse = useRef(new Animated.Value(1)).current;
+  const dot = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
     AsyncStorage.getItem(STORE).then((v) => { if (v) try { setSpots(JSON.parse(v)); } catch (e) {} });
-    return () => clearTimeout(timerRef.current);
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => { clearInterval(tick); clearTimeout(timerRef.current); scanRef.current = false; };
   }, []);
+
+  // pulsing live dot while scanning
+  useEffect(() => {
+    if (scanning) {
+      const anim = Animated.loop(Animated.sequence([
+        Animated.timing(dot, { toValue: 0.25, duration: 700, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(dot, { toValue: 1, duration: 700, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ]));
+      anim.start();
+      return () => anim.stop();
+    } else {
+      dot.setValue(1);
+    }
+  }, [scanning]);
+
   const persist = useCallback((next) => {
     setSpots(next);
     AsyncStorage.setItem(STORE, JSON.stringify(next)).catch(() => {});
@@ -156,11 +215,17 @@ export default function Screen() {
     toastTimer.current = setTimeout(() => setToast(''), 2200);
   };
 
-  const loop = useCallback(async () => {
-    if (!scanRef.current) return;
-    const m = await measure();
-    if (!scanRef.current) return;
+  const applyReading = (m) => {
     setReading(m);
+    setLastAt(Date.now());
+    setHistory((h) => [...h, m.offline ? 0 : m.score].slice(-HISTORY_MAX));
+    // quick pulse so a new reading is unmistakable
+    pulse.setValue(1);
+    Animated.sequence([
+      Animated.timing(pulse, { toValue: 1.05, duration: 140, useNativeDriver: true }),
+      Animated.spring(pulse, { toValue: 1, friction: 4, useNativeDriver: true }),
+    ]).start();
+
     const b = m.offline ? 'red' : band(m.score);
     if (b === 'green' && lastBandRef.current && lastBandRef.current !== 'green') {
       haptic('success');
@@ -173,7 +238,20 @@ export default function Screen() {
       }
     }
     lastBandRef.current = b;
-    timerRef.current = setTimeout(loop, 1500);
+  };
+
+  const loop = useCallback(() => {
+    if (!scanRef.current) return;
+    const seq = ++seqRef.current;
+    setMeasuring(true);
+    measure().then((m) => {
+      if (seqRef.current !== seq || !scanRef.current) return;
+      applyReading(m);
+    }).catch(() => {}).finally(() => {
+      if (seqRef.current !== seq) return;
+      setMeasuring(false);
+      if (scanRef.current) timerRef.current = setTimeout(loop, CYCLE_GAP);
+    });
   }, []);
 
   const toggleScan = () => {
@@ -185,6 +263,7 @@ export default function Screen() {
       loop();
     } else {
       clearTimeout(timerRef.current);
+      setMeasuring(false);
       try { const K = require('expo-keep-awake'); Promise.resolve(K.deactivateKeepAwake()).catch(() => {}); } catch (e) {}
     }
   };
@@ -207,6 +286,33 @@ export default function Screen() {
   const sorted = [...spots].sort((a, b) => b.score - a.score);
   const best = sorted[0];
   const r = reading;
+  const idle = !r && !scanning;
+
+  // trend from recent history
+  const trend = useMemo(() => {
+    if (history.length < 4) return null;
+    const recent = history.slice(-3);
+    const prev = history.slice(-6, -3);
+    if (prev.length === 0) return null;
+    const avg = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+    const d = avg(recent) - avg(prev);
+    if (d > 4) return { dir: 'up', txt: 'Rising', color: t.green };
+    if (d < -4) return { dir: 'down', txt: 'Falling', color: t.red };
+    return { dir: 'flat', txt: 'Steady', color: t.label2 };
+  }, [history, t]);
+
+  // "updated Ns ago" text
+  const agoTxt = (() => {
+    if (!lastAt) return scanning ? 'Starting…' : 'Not started';
+    if (measuring) return 'Measuring…';
+    const secs = Math.max(0, Math.round((now - lastAt) / 1000));
+    if (secs <= 1) return 'Updated just now';
+    return `Updated ${secs}s ago`;
+  })();
+
+  const liveColor = r && r.offline ? t.red : scanning ? t.green : t.label2;
+  const sparkColor = r && r.offline ? t.red : trend ? trend.color : t.blue;
+  const vsBest = r && !r.offline && best ? r.score - best.score : null;
 
   return (
     <View style={{ flex: 1, backgroundColor: t.bg }}>
@@ -215,21 +321,50 @@ export default function Screen() {
         contentContainerStyle={{ paddingTop: insets.top + 10, paddingBottom: insets.bottom + 44, paddingHorizontal: 18 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* large title */}
         <Text style={s.title}>Signal Scout</Text>
         <Text style={s.subtitle}>Find the spot with the best data.</Text>
 
-        {/* gauge card */}
-        <View style={[s.card, { alignItems: 'center', paddingVertical: 26 }]}>
-          <Gauge t={t} score={r ? r.score : 0} offline={r ? r.offline : false} active={scanning || !!r} />
-
-          <View style={s.stats}>
-            <Stat t={t} s={s} value={r && r.ping != null ? String(r.ping) : '—'} unit="ms" label="Ping" />
-            <View style={s.vsep} />
-            <Stat t={t} s={s} value={r && r.mbps > 0 ? String(r.mbps) : '—'} unit="Mbps" label="Download" />
-            <View style={s.vsep} />
-            <Stat t={t} s={s} value={r && !r.offline ? netLabel() : '—'} unit="" label="Network" />
+        {/* live gauge card */}
+        <View style={[s.card, { paddingTop: 16, paddingBottom: 18 }]}>
+          {/* status row */}
+          <View style={s.statusRow}>
+            <View style={s.statusLeft}>
+              <Animated.View style={[s.liveDot, { backgroundColor: liveColor, opacity: scanning ? dot : 1 }]} />
+              <Text style={[s.statusTxt, { color: t.label2 }]}>{agoTxt}</Text>
+            </View>
+            {trend && scanning && (
+              <View style={[s.trendChip, { backgroundColor: t.dark ? t.fill : t.bg }]}>
+                <Text style={{ color: trend.color, fontSize: 13, fontWeight: '600' }}>
+                  {trend.dir === 'up' ? '↑ ' : trend.dir === 'down' ? '↓ ' : '→ '}{trend.txt}
+                </Text>
+              </View>
+            )}
           </View>
+
+          <View style={{ alignItems: 'center', marginTop: 6 }}>
+            <Gauge t={t} score={r ? r.score : 0} offline={r ? r.offline : false} idle={idle} pulse={pulse} />
+          </View>
+
+          {/* stats */}
+          <View style={s.stats}>
+            <Stat s={s} value={r && r.ping != null ? String(r.ping) : '—'} unit="ms" label="Ping" />
+            <View style={s.vsep} />
+            <Stat s={s} value={r && r.mbps > 0 ? String(r.mbps) : '—'} unit="Mbps" label="Download" />
+            <View style={s.vsep} />
+            <Stat s={s} value={r && !r.offline ? netLabel() : '—'} unit="" label="Network" />
+          </View>
+
+          {/* live sparkline */}
+          <View style={{ marginTop: 16 }}>
+            <Sparkline t={t} history={history} color={sparkColor} />
+          </View>
+          {vsBest != null && best && (
+            <Text style={s.vsBest}>
+              {vsBest >= 0
+                ? `As good as or better than your best spot (${best.name})`
+                : `${Math.abs(vsBest)} below your best spot (${best.name})`}
+            </Text>
+          )}
         </View>
 
         {/* actions */}
@@ -279,11 +414,11 @@ export default function Screen() {
           </Pressable>
           {showTips && (
             <View>
+              <Tip s={s} t="Walk while scanning" d="Keep the app open and move slowly. Watch the graph above rise or fall — stop where it peaks. That is the strongest spot nearby." />
               <Tip s={s} t="Turn on Wi-Fi Calling" d="Settings › Phone › Wi-Fi Calling. If any Wi-Fi exists, calls and texts use it instead of the weak cell signal." />
               <Tip s={s} t="Toggle Airplane Mode" d="Flip it on, then off. Forces the phone to grab the strongest tower instead of clinging to a weak one." />
-              <Tip s={s} t="Move toward a window" d="Signal is far stronger near glass and exterior walls. This app shows exactly where — walk and watch the number." />
+              <Tip s={s} t="Move toward a window" d="Signal is far stronger near glass and exterior walls." />
               <Tip s={s} t="Keep the edges clear" d="The antennas sit at the top and bottom. A hand or thick case over them lowers signal." />
-              <Tip s={s} t="Reset network settings" d="Settings › General › Transfer or Reset › Reset Network Settings. Clears a stuck connection. Re-adds Wi-Fi passwords after." />
               <Tip s={s} t="A booster is the only real amplifier" d="Hardware like weBoost truly strengthens signal. No app can — transmit power is fixed and capped by law." last />
             </View>
           )}
@@ -324,7 +459,7 @@ export default function Screen() {
   );
 }
 
-function Stat({ t, s, value, unit, label }) {
+function Stat({ s, value, unit, label }) {
   return (
     <View style={{ flex: 1, alignItems: 'center' }}>
       <Text style={s.statVal}>{value}{unit ? <Text style={s.statUnit}> {unit}</Text> : null}</Text>
@@ -348,11 +483,18 @@ function makeStyles(t) {
 
     card: { backgroundColor: t.card, borderRadius: 18, paddingHorizontal: 16, paddingVertical: 6, marginBottom: 8, overflow: 'hidden' },
 
-    stats: { flexDirection: 'row', alignItems: 'center', marginTop: 22, alignSelf: 'stretch' },
+    statusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 28 },
+    statusLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    liveDot: { width: 9, height: 9, borderRadius: 5 },
+    statusTxt: { fontSize: 13.5, fontWeight: '500' },
+    trendChip: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 9 },
+
+    stats: { flexDirection: 'row', alignItems: 'center', marginTop: 20, alignSelf: 'stretch' },
     vsep: { width: StyleSheet.hairlineWidth, height: 34, backgroundColor: t.sep },
     statVal: { color: t.label, fontSize: 21, fontWeight: '600', letterSpacing: -0.4 },
     statUnit: { color: t.label2, fontSize: 13, fontWeight: '500' },
     statLabel: { color: t.label2, fontSize: 12.5, marginTop: 3 },
+    vsBest: { color: t.label2, fontSize: 12.5, textAlign: 'center', marginTop: 10 },
 
     primary: { borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 10 },
     primaryTxt: { color: '#FFFFFF', fontSize: 17, fontWeight: '600', letterSpacing: -0.2 },
@@ -362,7 +504,7 @@ function makeStyles(t) {
 
     section: { color: t.label2, fontSize: 12.5, fontWeight: '500', letterSpacing: 0.5, marginTop: 22, marginBottom: 8, marginLeft: 16 },
 
-    bestRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 14, marginHorizontal: -16, marginTop: 0, paddingLeft: 16 },
+    bestRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 14, marginHorizontal: -16, paddingLeft: 16 },
     bestTxt: { flex: 1, color: t.label2, fontSize: 13.5, lineHeight: 18 },
 
     empty: { color: t.label2, fontSize: 14, textAlign: 'center', paddingVertical: 18 },
