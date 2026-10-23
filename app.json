@@ -55,7 +55,13 @@
         }
       ],
       "@kesha-antonov/react-native-background-downloader",
-      "react-native-blob-util"
+      "react-native-blob-util",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Signal Scout lets you pick a photo to ask the on-device AI about it. Photos stay on your device."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false
