@@ -16,13 +16,25 @@ class Boundary extends React.Component {
 
 /* Loads + runs the model for ONE chat. Keyed by chat id in the parent, so a
    fresh session (seeded with that chat's history) is created per chat. */
+const SYSTEM_PROMPT =
+  "You are a helpful, friendly AI assistant running privately on the user's phone, with no internet. " +
+  "Give clear, direct, and accurate answers. Think it through, then answer. Keep it concise unless the user asks for detail. " +
+  "If you are unsure or don't know, say so honestly rather than making something up.";
+
 function ModelChat({ t, chat, chats, activeChatId, persistMessages, onNewChat, onOpenChat, onDeleteChat }) {
   const { models, useLLMChatSession } = require('react-native-executorch');
   const initialMessages = useMemo(
-    () => (chat.messages || []).filter((m) => m.text).map((m) => ({ role: m.role, content: m.text })),
+    () => [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...(chat.messages || []).filter((m) => m.text).map((m) => ({ role: m.role, content: m.text })),
+    ],
     [] // chat is fixed for this mount (component is keyed by chat id)
   );
-  const llm = useLLMChatSession(models.llm.LFM2_5_VL_450M.DEFAULT, { initialMessages });
+  // Bigger 1.6B vision model: noticeably smarter than 450M, still on-device + sees photos.
+  const llm = useLLMChatSession(models.llm.LFM2_5_VL_1_6B.DEFAULT, {
+    initialMessages,
+    generationConfig: { maxNewTokens: 512, temperature: 0.7 },
+  });
 
   const [messages, setMessages] = useState(chat.messages || []);
   const [input, setInput] = useState('');
