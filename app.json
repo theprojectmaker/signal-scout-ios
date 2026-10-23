@@ -59,7 +59,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Signal Scout lets you pick a photo to ask the on-device AI about it. Photos stay on your device."
+          "photosPermission": "Signal Scout lets you pick a photo to ask the on-device AI about it. Photos stay on your device.",
+          "cameraPermission": "Signal Scout lets you take a photo to ask the on-device AI about it. Photos stay on your device."
         }
       ]
     ],
