@@ -89,7 +89,8 @@ function ModelChat({ t, chat, chats, activeChatId, persistMessages, onNewChat, o
         setMessages([...base, { role: 'assistant', text: acc, streaming: true }]);
       });
     } catch (e) {
-      acc = acc || 'Sorry — something went wrong generating a reply.';
+      const info = img ? ` [img ${img.width}x${img.height} ${img.format} ${img.data && img.data.length}b]` : '';
+      acc = acc || ('⚠️ ' + ((e && e.message) ? e.message : String(e)) + info);
     }
     commit([...base, { role: 'assistant', text: acc, streaming: false }]);
     setGenerating(false);
