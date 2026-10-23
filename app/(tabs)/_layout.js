@@ -23,6 +23,15 @@ function ChatIcon({ color }) {
   );
 }
 
+function LightIcon({ color }) {
+  return (
+    <Svg width={26} height={26} viewBox="0 0 24 24">
+      <Path d="M9 3h6v4a3 3 0 0 1-.9 2.1L13 10.2V14h-2v-3.8L9.9 9.1A3 3 0 0 1 9 7V3Z" fill="none" stroke={color} strokeWidth={1.8} strokeLinejoin="round" />
+      <Path d="M11 14h2v6a1 1 0 0 1-2 0v-6Z" fill={color} />
+    </Svg>
+  );
+}
+
 export default function TabsLayout() {
   const dark = useColorScheme() === 'dark';
   return (
@@ -40,6 +49,7 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" options={{ title: 'Scout', tabBarIcon: ({ color }) => <ScoutIcon color={color} /> }} />
       <Tabs.Screen name="chat" options={{ title: 'Chat', tabBarIcon: ({ color }) => <ChatIcon color={color} /> }} />
+      <Tabs.Screen name="light" options={{ title: 'Light', tabBarIcon: ({ color }) => <LightIcon color={color} /> }} />
     </Tabs>
   );
 }

@@ -62,7 +62,14 @@
           "photosPermission": "Signal Scout lets you pick a photo to ask the on-device AI about it. Photos stay on your device.",
           "cameraPermission": "Signal Scout lets you take a photo to ask the on-device AI about it. Photos stay on your device."
         }
-      ]
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Signal Scout uses the camera light for the flashlight."
+        }
+      ],
+      "expo-brightness"
     ],
     "experiments": {
       "typedRoutes": false
