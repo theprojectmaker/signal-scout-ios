@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ChatUI from './ChatUI';
@@ -7,6 +7,11 @@ import { loadChats, saveChats, newChat, titleFrom } from './chatStore';
 
 const ENABLED_KEY = 'ai.enabled.v1';
 
+const SYSTEM_PROMPT =
+  "You are a helpful, friendly AI assistant running privately on the user's phone, with no internet. " +
+  "Give clear, direct, and accurate answers. Think it through, then answer. Keep it concise unless the user asks for detail. " +
+  "If you are unsure or don't know, say so honestly rather than making something up.";
+
 class Boundary extends React.Component {
   state = { err: false };
   static getDerivedStateFromError() { return { err: true }; }
@@ -14,34 +19,25 @@ class Boundary extends React.Component {
   render() { return this.state.err ? this.props.fallback : this.props.children; }
 }
 
-/* Loads + runs the model for ONE chat. Keyed by chat id in the parent, so a
-   fresh session (seeded with that chat's history) is created per chat. */
-const SYSTEM_PROMPT =
-  "You are a helpful, friendly AI assistant running privately on the user's phone, with no internet. " +
-  "Give clear, direct, and accurate answers. Think it through, then answer. Keep it concise unless the user asks for detail. " +
-  "If you are unsure or don't know, say so honestly rather than making something up.";
-
-function ModelChat({ t, chat, chats, activeChatId, persistMessages, onNewChat, onOpenChat, onDeleteChat }) {
+/* The model is loaded ONCE here and never reloaded (reloading a model on a
+   phone can run it out of memory -> "can't load"). Switching chats only swaps
+   the on-screen transcript; the model stays resident. */
+function ModelChat({ t, active, activeChatId, chats, persistMessages, onNewChat, onOpenChat, onDeleteChat }) {
   const { models, useLLMChatSession } = require('react-native-executorch');
-  const initialMessages = useMemo(
-    () => [
-      { role: 'system', content: SYSTEM_PROMPT },
-      ...(chat.messages || []).filter((m) => m.text).map((m) => ({ role: m.role, content: m.text })),
-    ],
-    [] // chat is fixed for this mount (component is keyed by chat id)
-  );
-  // Bigger 1.6B vision model: noticeably smarter than 450M, still on-device + sees photos.
-  const llm = useLLMChatSession(models.llm.LFM2_5_VL_1_6B.DEFAULT, {
-    initialMessages,
+  const llm = useLLMChatSession(models.llm.LFM2_5_VL_450M.DEFAULT, {
+    initialMessages: [{ role: 'system', content: SYSTEM_PROMPT }],
     generationConfig: { maxNewTokens: 512, temperature: 0.7 },
   });
 
-  const [messages, setMessages] = useState(chat.messages || []);
+  const [messages, setMessages] = useState(active.messages || []);
   const [input, setInput] = useState('');
   const [generating, setGenerating] = useState(false);
   const [attachedUri, setAttachedUri] = useState(null);
   const [preparing, setPreparing] = useState(false);
   const attachRef = useRef(null);
+
+  // show the active chat's transcript (model is NOT reloaded on switch)
+  useEffect(() => { setMessages(active.messages || []); setInput(''); clearAttach(); }, [activeChatId]);
 
   const status = (() => {
     if (llm.error) return { state: 'unavailable', label: 'Could not load model' };
@@ -51,7 +47,7 @@ function ModelChat({ t, chat, chats, activeChatId, persistMessages, onNewChat, o
   })();
 
   const commit = (next) => { setMessages(next); persistMessages(next); };
-  const clearAttach = () => { attachRef.current = null; setAttachedUri(null); };
+  function clearAttach() { attachRef.current = null; setAttachedUri(null); }
 
   const capture = useCallback(async (mode) => {
     try {
@@ -69,9 +65,7 @@ function ModelChat({ t, chat, chats, activeChatId, persistMessages, onNewChat, o
       setPreparing(true);
       const { uriToImageBuffer } = require('./imageBuffer');
       attachRef.current = await uriToImageBuffer(uri);
-    } catch (e) {
-      clearAttach();
-    } finally { setPreparing(false); }
+    } catch (e) { clearAttach(); } finally { setPreparing(false); }
   }, []);
 
   const pickImage = useCallback(() => {
@@ -126,7 +120,7 @@ function ModelChat({ t, chat, chats, activeChatId, persistMessages, onNewChat, o
       attachedUri={attachedUri}
       onClearImage={clearAttach}
       canSend={llm.isReady && !preparing}
-      title={chat.title}
+      title={active.title}
       chats={chats}
       activeChatId={activeChatId}
       onNewChat={onNewChat}
@@ -139,6 +133,10 @@ function ModelChat({ t, chat, chats, activeChatId, persistMessages, onNewChat, o
 function ChatsManager({ t }) {
   const [chats, setChats] = useState(null);
   const [activeId, setActiveId] = useState(null);
+  const chatsRef = useRef([]);
+  const activeIdRef = useRef(null);
+  chatsRef.current = chats || [];
+  activeIdRef.current = activeId;
 
   useEffect(() => {
     (async () => {
@@ -149,34 +147,40 @@ function ChatsManager({ t }) {
     })();
   }, []);
 
-  const persist = useCallback((next) => { setChats(next); saveChats(next); }, []);
+  // stable so a send always writes to the chat that is active right now
+  const persistMessages = useCallback((msgs) => {
+    const next = chatsRef.current.map((c) => c.id === activeIdRef.current
+      ? { ...c, messages: msgs, title: (!c.title || c.title === 'New chat') ? titleFrom(msgs) : c.title, updatedAt: Date.now() }
+      : c);
+    next.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    setChats(next); saveChats(next);
+  }, []);
+
+  const onNewChat = useCallback(() => {
+    const c = newChat();
+    setChats((cs) => [c, ...(cs || [])]);
+    setActiveId(c.id);
+  }, []);
+  const onOpenChat = useCallback((id) => setActiveId(id), []);
+  const onDeleteChat = useCallback((id) => {
+    setChats((cs) => {
+      let next = (cs || []).filter((c) => c.id !== id);
+      if (next.length === 0) next = [newChat()];
+      saveChats(next);
+      if (id === activeIdRef.current) setActiveId(next[0].id);
+      return next;
+    });
+  }, []);
 
   if (!chats || !activeId) return null;
   const active = chats.find((c) => c.id === activeId) || chats[0];
 
-  const persistMessages = (msgs) => {
-    const next = chats.map((c) => c.id === active.id
-      ? { ...c, messages: msgs, title: (!c.title || c.title === 'New chat') ? titleFrom(msgs) : c.title, updatedAt: Date.now() }
-      : c);
-    next.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-    persist(next);
-  };
-  const onNewChat = () => { const c = newChat(); persist([c, ...chats]); setActiveId(c.id); };
-  const onOpenChat = (id) => setActiveId(id);
-  const onDeleteChat = (id) => {
-    let next = chats.filter((c) => c.id !== id);
-    if (next.length === 0) next = [newChat()];
-    persist(next);
-    if (id === activeId) setActiveId(next[0].id);
-  };
-
   return (
     <ModelChat
-      key={active.id}
       t={t}
-      chat={active}
-      chats={chats}
+      active={active}
       activeChatId={activeId}
+      chats={chats}
       persistMessages={persistMessages}
       onNewChat={onNewChat}
       onOpenChat={onOpenChat}
