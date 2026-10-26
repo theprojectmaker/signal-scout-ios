@@ -82,7 +82,7 @@ export default function ChatUI({
         {status.state === 'needs-download' && (
           <View style={s.setup}>
             <Text style={s.setupTitle}>Set up offline AI</Text>
-            <Text style={s.setupBody}>Download the AI model once (about 500 MB, needs internet this one time — use Wi-Fi). After that it runs entirely on your phone — no signal required — and can answer questions about photos too.</Text>
+            <Text style={s.setupBody}>Download the AI model once (about 1 GB, needs internet this one time — use Wi-Fi). After that it runs entirely on your phone — no signal required — and can answer questions about photos too.</Text>
             <Pressable onPress={onDownload} style={({ pressed }) => [s.setupBtn, { backgroundColor: t.blue }, pressed && { opacity: 0.6 }]}><Text style={s.setupBtnTxt}>Download model</Text></Pressable>
           </View>
         )}

@@ -24,7 +24,7 @@ class Boundary extends React.Component {
    the on-screen transcript; the model stays resident. */
 function ModelChat({ t, active, activeChatId, chats, persistMessages, onNewChat, onOpenChat, onDeleteChat }) {
   const { models, useLLMChatSession } = require('react-native-executorch');
-  const llm = useLLMChatSession(models.llm.LFM2_5_VL_450M.DEFAULT, {
+  const llm = useLLMChatSession(models.llm.LFM2_5_VL_1_6B.DEFAULT, {
     initialMessages: [{ role: 'system', content: SYSTEM_PROMPT }],
     generationConfig: { maxNewTokens: 512, temperature: 0.7 },
   });
