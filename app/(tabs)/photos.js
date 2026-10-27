@@ -15,7 +15,8 @@ class Boundary extends React.Component {
 
 function VLModel({ t }) {
   const { models, useLLMChatSession } = require('react-native-executorch');
-  const llm = useLLMChatSession(models.llm.LFM2_5_VL_450M.DEFAULT, {
+  const VL = models.llm.LFM2_5_VL_450M.XNNPACK_8DA4W || models.llm.LFM2_5_VL_450M.DEFAULT;
+  const llm = useLLMChatSession(VL, {
     initialMessages: [{ role: 'system', content: SYSTEM }],
     generationConfig: { maxNewTokens: 384, temperature: 0.7 },
   });
@@ -80,7 +81,13 @@ function VLModel({ t }) {
       });
     } catch (e) {
       const info = img ? ` [img ${img.width}x${img.height} ${img.format} ${img.data && img.data.length}b]` : '';
-      acc = acc || ('⚠️ ' + ((e && e.message) ? e.message : String(e)) + info);
+      let dbg = '';
+      try {
+        const hasCfg = !!(VL && VL.preprocessorConfig && VL.preprocessorConfig.image);
+        const mods = VL && VL.modalities ? VL.modalities.join(',') : 'none';
+        dbg = ` [cfg.img=${hasCfg} mods=${mods}]`;
+      } catch (ee) {}
+      acc = acc || ('⚠️ ' + ((e && e.message) ? e.message : String(e)) + info + dbg);
     }
     setMessages([...base, { role: 'assistant', text: acc, streaming: false }]);
     setGenerating(false);
