@@ -82,7 +82,7 @@ export default function ChatUI({
         {status.state === 'needs-download' && (
           <View style={s.setup}>
             <Text style={s.setupTitle}>Set up offline AI</Text>
-            <Text style={s.setupBody}>Download the AI model once (about 1 GB, needs internet this one time — use Wi-Fi). After that it runs entirely on your phone — no signal required — and can answer questions about photos too.</Text>
+            <Text style={s.setupBody}>Download the AI model once (about 1.2 GB, needs internet this one time — use Wi-Fi). After that it runs entirely on your phone — no signal required.</Text>
             <Pressable onPress={onDownload} style={({ pressed }) => [s.setupBtn, { backgroundColor: t.blue }, pressed && { opacity: 0.6 }]}><Text style={s.setupBtnTxt}>Download model</Text></Pressable>
           </View>
         )}
@@ -99,7 +99,7 @@ export default function ChatUI({
         {ready && empty && (
           <View style={{ flex: 1, justifyContent: 'center' }}>
             <Text style={s.greet}>Ask me anything</Text>
-            <Text style={s.greetSub}>I run on your phone — no internet needed. You can send a photo too.</Text>
+            <Text style={s.greetSub}>I run on your phone — no internet needed.{onPickImage ? ' You can send a photo too.' : ''}</Text>
             <View style={{ marginTop: 18, gap: 8 }}>
               {EXAMPLES.map((ex) => (<Pressable key={ex} onPress={() => onPickExample(ex)} style={({ pressed }) => [s.example, pressed && { opacity: 0.6 }]}><Text style={s.exampleTxt}>{ex}</Text></Pressable>))}
             </View>

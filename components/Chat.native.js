@@ -12,6 +12,15 @@ const SYSTEM_PROMPT =
   "Give clear, direct, and accurate answers. Think it through, then answer. Keep it concise unless the user asks for detail. " +
   "If you are unsure or don't know, say so honestly rather than making something up.";
 
+// Qwen3 reasons inside <think>…</think>; show only the final answer.
+function cleanThink(s) {
+  if (!s) return s;
+  let out = s.replace(/<think>[\s\S]*?<\/think>/g, '');
+  const open = out.indexOf('<think>');
+  if (open !== -1) out = out.slice(0, open); // still thinking — hide the rest
+  return out.replace(/^\s+/, '');
+}
+
 class Boundary extends React.Component {
   state = { err: false };
   static getDerivedStateFromError() { return { err: true }; }
@@ -24,7 +33,7 @@ class Boundary extends React.Component {
    the on-screen transcript; the model stays resident. */
 function ModelChat({ t, active, activeChatId, chats, persistMessages, onNewChat, onOpenChat, onDeleteChat }) {
   const { models, useLLMChatSession } = require('react-native-executorch');
-  const llm = useLLMChatSession(models.llm.LFM2_5_VL_1_6B.DEFAULT, {
+  const llm = useLLMChatSession(models.llm.QWEN3_1_7B.DEFAULT, {
     initialMessages: [{ role: 'system', content: SYSTEM_PROMPT }],
     generationConfig: { maxNewTokens: 512, temperature: 0.7 },
   });
@@ -92,13 +101,13 @@ function ModelChat({ t, active, activeChatId, chats, persistMessages, onNewChat,
       const content = img ? [{ kind: 'image', image: img }, shown] : shown;
       await llm.sendMessage(content, (tok) => {
         acc += tok;
-        setMessages([...base, { role: 'assistant', text: acc, streaming: true }]);
+        setMessages([...base, { role: 'assistant', text: cleanThink(acc), streaming: true }]);
       });
     } catch (e) {
       const info = img ? ` [img ${img.width}x${img.height} ${img.format} ${img.data && img.data.length}b]` : '';
       acc = acc || ('⚠️ ' + ((e && e.message) ? e.message : String(e)) + info);
     }
-    commit([...base, { role: 'assistant', text: acc, streaming: false }]);
+    commit([...base, { role: 'assistant', text: cleanThink(acc) || acc, streaming: false }]);
     setGenerating(false);
   }, [input, generating, preparing, attachedUri, messages, llm]);
 
@@ -116,7 +125,7 @@ function ModelChat({ t, active, activeChatId, chats, persistMessages, onNewChat,
       status={status}
       onDownload={() => {}}
       onPickExample={(ex) => setInput(ex)}
-      onPickImage={pickImage}
+      onPickImage={undefined}
       attachedUri={attachedUri}
       onClearImage={clearAttach}
       canSend={llm.isReady && !preparing}
