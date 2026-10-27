@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { usePathname } from 'expo-router';
 import ChatUI from './ChatUI';
 import { useTheme } from './theme';
 import { loadChats, saveChats, newChat, titleFrom } from './chatStore';
@@ -146,6 +147,7 @@ function ChatsManager({ t }) {
   const activeIdRef = useRef(null);
   chatsRef.current = chats || [];
   activeIdRef.current = activeId;
+  const onPhotos = (usePathname() || '').startsWith('/photos');
 
   useEffect(() => {
     (async () => {
@@ -183,6 +185,20 @@ function ChatsManager({ t }) {
 
   if (!chats || !activeId) return null;
   const active = chats.find((c) => c.id === activeId) || chats[0];
+
+  // On the Photos tab, unload the chat model so the vision model can load
+  // (the phone holds only one model at a time).
+  if (onPhotos) {
+    return (
+      <ChatUI
+        t={t} messages={[]} input="" setInput={() => {}} onSend={() => {}} onStop={() => {}}
+        generating={false} status={{ state: 'loading', label: 'Paused — using Photos' }}
+        onDownload={() => {}} onPickExample={() => {}}
+        title={active.title} chats={chats} activeChatId={activeId}
+        onNewChat={onNewChat} onOpenChat={onOpenChat} onDeleteChat={onDeleteChat}
+      />
+    );
+  }
 
   return (
     <ModelChat

@@ -23,6 +23,15 @@ function ChatIcon({ color }) {
   );
 }
 
+function PhotosIcon({ color }) {
+  return (
+    <Svg width={26} height={26} viewBox="0 0 24 24">
+      <Path d="M4 6h3l1.5-2h7L17 6h3a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z" fill="none" stroke={color} strokeWidth={1.8} strokeLinejoin="round" />
+      <Path d="M15.5 13a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" fill="none" stroke={color} strokeWidth={1.8} />
+    </Svg>
+  );
+}
+
 function LightIcon({ color }) {
   return (
     <Svg width={26} height={26} viewBox="0 0 24 24">
@@ -49,6 +58,7 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" options={{ title: 'Scout', tabBarIcon: ({ color }) => <ScoutIcon color={color} /> }} />
       <Tabs.Screen name="chat" options={{ title: 'Chat', tabBarIcon: ({ color }) => <ChatIcon color={color} /> }} />
+      <Tabs.Screen name="photos" options={{ title: 'Photos', tabBarIcon: ({ color }) => <PhotosIcon color={color} /> }} />
       <Tabs.Screen name="light" options={{ title: 'Light', tabBarIcon: ({ color }) => <LightIcon color={color} /> }} />
     </Tabs>
   );
