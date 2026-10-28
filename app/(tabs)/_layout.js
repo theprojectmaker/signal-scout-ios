@@ -101,6 +101,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="browser" options={{ href: null, title: 'Browser', tabBarIcon: ({ color }) => <BrowserIcon color={color} /> }} />
       <Tabs.Screen name="photos" options={{ href: null, title: 'Photos', tabBarIcon: ({ color }) => <PhotosIcon color={color} /> }} />
       <Tabs.Screen name="light" options={{ href: null, title: 'Light', tabBarIcon: ({ color }) => <LightIcon color={color} /> }} />
+      <Tabs.Screen name="notes" options={{ href: null, title: 'Notes' }} />
     </Tabs>
   );
 }

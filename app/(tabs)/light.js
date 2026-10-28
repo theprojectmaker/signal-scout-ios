@@ -38,6 +38,7 @@ export default function LightScreen() {
   const [sos, setSos] = useState(false);
   const [sosOn, setSosOn] = useState(false);
   const [camPerm, setCamPerm] = useState(null);
+  const [screenColor, setScreenColor] = useState('#FFFFFF');
   const stepRef = useRef(0);
   const timerRef = useRef(null);
   const prevBrightness = useRef(null);
@@ -116,9 +117,10 @@ export default function LightScreen() {
   };
 
   if (screenWhite) {
+    const darkText = screenColor === '#FFFFFF' || screenColor === '#FFD60A';
     return (
-      <Pressable style={st.white} onPress={() => { setOn(false); setSos(false); }}>
-        <Text style={st.whiteHint}>Tap anywhere to turn off</Text>
+      <Pressable style={[st.white, { backgroundColor: screenColor }]} onPress={() => { setOn(false); setSos(false); }}>
+        <Text style={[st.whiteHint, { color: darkText ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.7)' }]}>Tap anywhere to turn off</Text>
       </Pressable>
     );
   }
@@ -139,6 +141,14 @@ export default function LightScreen() {
           </Pressable>
         ))}
       </View>
+
+      {mode === 'screen' ? (
+        <View style={s.colorRow}>
+          {['#FFFFFF', '#FF453B', '#30D158', '#0A84FF', '#FFD60A'].map((c) => (
+            <Pressable key={c} onPress={() => setScreenColor(c)} style={[s.swatch, { backgroundColor: c }, screenColor === c && { borderColor: t.blue, borderWidth: 3 }]} />
+          ))}
+        </View>
+      ) : null}
 
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 28 }}>
         <Pressable onPress={togglePower} style={[s.power, { backgroundColor: on ? t.amber : t.card, borderColor: on ? t.amber : t.sep }]}>
@@ -168,6 +178,8 @@ function styles(t) {
     title: { color: t.label, fontSize: 34, fontWeight: '700', letterSpacing: 0.37 },
     sub: { color: t.label2, fontSize: 15, marginTop: 4, marginBottom: 18 },
     seg: { flexDirection: 'row', backgroundColor: t.fill, borderRadius: 10, padding: 3 },
+    colorRow: { flexDirection: 'row', justifyContent: 'center', gap: 14, marginTop: 14 },
+    swatch: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: t.sep },
     segBtn: { flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center' },
     segTxt: { fontSize: 14, fontWeight: '600' },
     power: { width: 150, height: 150, borderRadius: 75, borderWidth: 2, alignItems: 'center', justifyContent: 'center', gap: 6 },
