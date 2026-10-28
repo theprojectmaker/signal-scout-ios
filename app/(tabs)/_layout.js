@@ -69,6 +69,14 @@ function LightIcon({ color }) {
   );
 }
 
+function MoreIcon({ color }) {
+  return (
+    <Svg width={26} height={26} viewBox="0 0 24 24">
+      <Path d="M5 12h.01M12 12h.01M19 12h.01" fill="none" stroke={color} strokeWidth={3} strokeLinecap="round" />
+    </Svg>
+  );
+}
+
 export default function TabsLayout() {
   const dark = useColorScheme() === 'dark';
   return (
@@ -86,11 +94,13 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" options={{ title: 'Scout', tabBarIcon: ({ color }) => <ScoutIcon color={color} /> }} />
       <Tabs.Screen name="chat" options={{ title: 'Chat', tabBarIcon: ({ color }) => <ChatIcon color={color} /> }} />
-      <Tabs.Screen name="photos" options={{ title: 'Photos', tabBarIcon: ({ color }) => <PhotosIcon color={color} /> }} />
       <Tabs.Screen name="remote" options={{ title: 'Remote', tabBarIcon: ({ color }) => <RemoteIcon color={color} /> }} />
-      <Tabs.Screen name="browser" options={{ title: 'Browser', tabBarIcon: ({ color }) => <BrowserIcon color={color} /> }} />
       <Tabs.Screen name="share" options={{ title: 'Share', tabBarIcon: ({ color }) => <ShareIcon color={color} /> }} />
-      <Tabs.Screen name="light" options={{ title: 'Light', tabBarIcon: ({ color }) => <LightIcon color={color} /> }} />
+      <Tabs.Screen name="more" options={{ title: 'More', tabBarIcon: ({ color }) => <MoreIcon color={color} /> }} />
+      {/* reachable from the More menu, hidden from the tab bar */}
+      <Tabs.Screen name="browser" options={{ href: null, title: 'Browser', tabBarIcon: ({ color }) => <BrowserIcon color={color} /> }} />
+      <Tabs.Screen name="photos" options={{ href: null, title: 'Photos', tabBarIcon: ({ color }) => <PhotosIcon color={color} /> }} />
+      <Tabs.Screen name="light" options={{ href: null, title: 'Light', tabBarIcon: ({ color }) => <LightIcon color={color} /> }} />
     </Tabs>
   );
 }
