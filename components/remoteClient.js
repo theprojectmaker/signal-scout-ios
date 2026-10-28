@@ -1,20 +1,23 @@
 // Remote-desktop transport for the Remote tab.
 //
-// Speaks the viewer protocol that the user's own Remote Control agent already serves
-// (tests/remote-control: lan-server.js -> viewer-session.js). The agent plays host directly:
-//   connect ws://<host>:<port>/join
-//     <- {type:'joined'} {type:'need-auth'}
-//     -> {cmd:'auth', password}
-//     <- {type:'authenticated'} {type:'screen',w,h} {type:'mode',dataSaver,grayscale}
-//     <- binary JPEG frames (FF D8…; a zoom-crop frame is prefixed with a 12-byte 'RGN1' header)
-//     -> input: {cmd:'move',x,y} down/up click/rightclick{x,y} wheel{delta} type{text} key{name}
-//        and set-data-saver/set-grayscale/clipboard-set/clipboard-get
-// No new server protocol is invented and nothing here touches a web filter — it connects only
-// to a PC the user runs the agent on, over their Wi-Fi (LAN, default port 8771) or relay.
+// Speaks the viewer protocol that the user's own Remote Control agent already serves, over two
+// paths that behave identically once connected (tests/remote-control):
+//   LAN    ws://<ip>:<port>/join                 (same Wi-Fi, no internet, default port 8771)
+//   Relay  wss://<relay>/join?code=CODE          (first pairing — the dashboard QR)
+//          wss://<relay>/join?token=TOKEN        (a saved computer; token minted on first pairing)
+//          wss://<relay>/join?hostId=ID          (open access — password is the gate)
+// After connect: <-{type:'joined',hostId,deviceName,token?} (relay mints `token` when via=code)
+//   <-{type:'need-auth'} ->{cmd:'auth',password} <-{type:'authenticated'} <-{screen}{mode}
+//   <- binary JPEG frames (FF D8…; zoom-crop frames prefixed 'RGN1'+u16 x,y,w,h)
+//   -> input: move{x,y} down/up click/rightclick{x,y} wheel{delta} type{text} key{name}
+//      plus set-data-saver/set-grayscale/clipboard-set/clipboard-get
+// No new server protocol and no filter circumvention — connects only to a PC the user runs the
+// agent on. The relay endpoints are the agent's own public domains (no secret); the per-device
+// hostId/token live only on this phone and in the QR.
 //
-// Built for a weak link: data-saver + grayscale are ON by default (the agent's tiny "trickle"
-// frames), outbound input is a seq-numbered queue that survives drops and coalesces moves, and
-// the socket reconnects with backoff. Byte counters make the data cost visible.
+// Built for a weak link: data-saver + grayscale ON by default (the agent's tiny "trickle"
+// frames), seq-numbered outbound queue that coalesces moves and survives drops, and the socket
+// cycles LAN->relay and reconnects with backoff. Byte counters make the data cost visible.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -48,9 +51,15 @@ function stripRegion(bytes) {
   return bytes;
 }
 
+// The agent's own public relay domains (tests/remote-control agent.js RELAY_CANDIDATES). Stable
+// custom domains first, the drifting workers.dev subdomain last. A code/token works only on the
+// relay the host registered with, so we try each until one answers.
+export const RELAY_BASES = ['wss://remote.sitey.my', 'wss://remote.agentdomains.co', 'wss://remote.scriptly.workers.dev'];
+
 const BACKOFF_MIN = 800;
 const BACKOFF_MAX = 15000;
-const MAX_QUEUE = 200; // bounded; oldest non-critical events drop first on a dead link
+const CONNECT_TIMEOUT = 8000; // give up on one target and try the next after this
+const MAX_QUEUE = 200;
 
 export function useRemoteDesktop() {
   const [phase, setPhase] = useState('idle'); // idle|connecting|authing|ready|error|locked
@@ -60,80 +69,74 @@ export function useRemoteDesktop() {
   const [mode, setMode] = useState({ dataSaver: true, grayscale: true });
   const [stats, setStats] = useState({ bytesIn: 0, bytesOut: 0, frames: 0 });
   const [clipboardText, setClipboardText] = useState(null);
+  const [paired, setPaired] = useState(null); // {hostId, deviceName, token} from the last 'joined'
 
   const ws = useRef(null);
-  const want = useRef(false); // user wants to be connected (drives reconnect)
-  const creds = useRef({ host: '', port: 8771, password: '' });
+  const want = useRef(false);
+  const targets = useRef([]); // ordered [{ url, label }]
+  const idx = useRef(0);
+  const triesInCycle = useRef(0);
+  const authedSock = useRef(false); // did the CURRENT socket reach 'authenticated'
+  const password = useRef('');
   const seq = useRef(0);
   const queue = useRef([]);
   const backoff = useRef(BACKOFF_MIN);
   const reconnectTimer = useRef(null);
+  const attemptTimer = useRef(null);
   const bytesIn = useRef(0);
   const bytesOut = useRef(0);
   const frames = useRef(0);
   const lastFrameAt = useRef(0);
   const mounted = useRef(true);
 
-  useEffect(() => () => { mounted.current = false; hardClose(); if (reconnectTimer.current) clearTimeout(reconnectTimer.current); }, []);
+  useEffect(() => () => {
+    mounted.current = false; want.current = false; hardClose();
+    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    if (attemptTimer.current) clearTimeout(attemptTimer.current);
+  }, []);
 
   const bumpStats = useCallback(() => {
-    if (!mounted.current) return;
-    setStats({ bytesIn: bytesIn.current, bytesOut: bytesOut.current, frames: frames.current });
+    if (mounted.current) setStats({ bytesIn: bytesIn.current, bytesOut: bytesOut.current, frames: frames.current });
   }, []);
 
   function rawSend(obj) {
     const s = ws.current;
     if (!s || s.readyState !== 1) return false;
-    try {
-      const str = JSON.stringify(obj);
-      s.send(str);
-      bytesOut.current += str.length;
-      return true;
-    } catch (e) { return false; }
+    try { const str = JSON.stringify(obj); s.send(str); bytesOut.current += str.length; return true; }
+    catch (e) { return false; }
   }
 
-  // Drain the outbound queue to the socket, coalescing is already done on enqueue.
   function flush() {
     const s = ws.current;
     if (!s || s.readyState !== 1) return;
-    while (queue.current.length) {
-      const msg = queue.current[0];
-      if (!rawSend(msg)) break;
-      queue.current.shift();
-    }
+    while (queue.current.length) { if (!rawSend(queue.current[0])) break; queue.current.shift(); }
     bumpStats();
   }
 
-  // Public: enqueue an input/control message. Each gets a sequence number so the order is
-  // explicit and nothing is silently lost; consecutive moves collapse to the latest.
+  // Public: enqueue an input/control message; each gets a sequence number so order is explicit
+  // and nothing is silently lost. Consecutive moves collapse to the latest.
   const sendInput = useCallback((msg) => {
     const m = { ...msg, seq: ++seq.current };
     const q = queue.current;
-    if (m.cmd === 'move' && q.length && q[q.length - 1].cmd === 'move') {
-      q[q.length - 1] = m; // only the newest cursor position matters
-    } else {
+    if (m.cmd === 'move' && q.length && q[q.length - 1].cmd === 'move') q[q.length - 1] = m;
+    else {
       q.push(m);
-      if (q.length > MAX_QUEUE) {
-        // drop the oldest coalescible event (a move) to stay bounded; keep clicks/keys
-        const i = q.findIndex((e) => e.cmd === 'move');
-        q.splice(i >= 0 ? i : 0, 1);
-      }
+      if (q.length > MAX_QUEUE) { const i = q.findIndex((e) => e.cmd === 'move'); q.splice(i >= 0 ? i : 0, 1); }
     }
     flush();
   }, []);
 
-  function handleJSON(text) {
-    let msg;
-    try { msg = JSON.parse(text); } catch (e) { return; }
+  function handleJSON(msg) {
     switch (msg.type) {
+      case 'joined':
+        setPaired({ hostId: msg.hostId || null, deviceName: msg.deviceName || null, token: msg.token || null });
+        break;
       case 'need-auth':
         setPhase('authing'); setStatusLabel('Signing in…');
-        rawSend({ cmd: 'auth', password: creds.current.password });
+        rawSend({ cmd: 'auth', password: password.current });
         break;
       case 'authenticated':
-        backoff.current = BACKOFF_MIN;
         setPhase('ready'); setStatusLabel('Connected');
-        // Minimum-data defaults for a weak link, then flush anything queued while connecting.
         rawSend({ cmd: 'set-data-saver', on: true });
         rawSend({ cmd: 'set-grayscale', on: true });
         flush();
@@ -157,17 +160,19 @@ export function useRemoteDesktop() {
       case 'clipboard':
         if (typeof msg.text === 'string') setClipboardText(msg.text);
         break;
+      case 'host-left':
+        setStatusLabel('Computer went offline');
+        break;
       default:
-        break; // joined / views / pong / text-probe — not needed here
+        break; // views / pong / text-probe / phone-joined / webrtc-* — not needed here
     }
   }
 
   function handleFrame(buf) {
     const bytes = stripRegion(new Uint8Array(buf));
-    bytesIn.current += bytes.length + 2; // +WS framing overhead, rough
+    bytesIn.current += bytes.length + 2;
     frames.current += 1;
     const now = Date.now();
-    // Throttle re-render so a fast level can't flood the JS thread; data-saver is slow anyway.
     if (now - lastFrameAt.current >= 40) {
       lastFrameAt.current = now;
       setFrameUri('data:image/jpeg;base64,' + bytesToBase64(bytes));
@@ -176,33 +181,73 @@ export function useRemoteDesktop() {
   }
 
   function open() {
-    if (!mounted.current || !want.current) return;
-    const { host, port } = creds.current;
-    setPhase('connecting'); setStatusLabel(`Connecting to ${host}:${port}…`);
+    if (!mounted.current || !want.current || targets.current.length === 0) return;
+    const target = targets.current[idx.current % targets.current.length];
+    setPhase('connecting');
+    setStatusLabel(`Connecting${target.label ? ` · ${target.label}` : ''}…`);
     let sock;
-    try {
-      sock = new WebSocket(`ws://${host}:${port}/join`);
-    } catch (e) { scheduleReconnect(); return; }
+    try { sock = new WebSocket(target.url); } catch (e) { failTarget(); return; }
     sock.binaryType = 'arraybuffer';
     ws.current = sock;
-    sock.onopen = () => { /* wait for need-auth */ };
+    authedSock.current = false;
+
+    if (attemptTimer.current) clearTimeout(attemptTimer.current);
+    attemptTimer.current = setTimeout(() => {
+      if (ws.current === sock && !authedSock.current) { try { sock.close(); } catch (e) {} }
+    }, CONNECT_TIMEOUT);
+
+    sock.onopen = () => { /* wait for joined / need-auth */ };
     sock.onmessage = (evt) => {
       const d = evt.data;
-      if (typeof d === 'string') handleJSON(d);
-      else if (d && d.byteLength !== undefined) handleFrame(d);
+      if (typeof d === 'string') {
+        let msg; try { msg = JSON.parse(d); } catch (e) { return; }
+        if (msg.type === 'authenticated') {
+          authedSock.current = true;
+          triesInCycle.current = 0;
+          backoff.current = BACKOFF_MIN;
+          if (attemptTimer.current) { clearTimeout(attemptTimer.current); attemptTimer.current = null; }
+          // Pin the working target so a later reconnect tries it first.
+          targets.current = [target, ...targets.current.filter((x) => x.url !== target.url)];
+          idx.current = 0;
+        }
+        handleJSON(msg);
+      } else if (d && d.byteLength !== undefined) {
+        handleFrame(d);
+      }
     };
     sock.onerror = () => { /* onclose follows */ };
     sock.onclose = () => {
       if (ws.current === sock) ws.current = null;
-      if (want.current && mounted.current) { setPhase('connecting'); scheduleReconnect(); }
+      if (attemptTimer.current) { clearTimeout(attemptTimer.current); attemptTimer.current = null; }
+      if (!want.current || !mounted.current) return;
+      if (authedSock.current) { setPhase('connecting'); scheduleSameTarget(); } // lost an established link
+      else failTarget(); // this target never authed — try the next one
     };
   }
 
-  function scheduleReconnect() {
-    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+  // Move to the next target; after a full lap with no success, back off before the next lap.
+  function failTarget() {
+    idx.current += 1;
+    triesInCycle.current += 1;
+    let wait = 300;
+    if (triesInCycle.current >= targets.current.length) {
+      triesInCycle.current = 0;
+      wait = backoff.current;
+      backoff.current = Math.min(BACKOFF_MAX, Math.round(backoff.current * 1.7));
+      setStatusLabel(`No answer — retrying in ${Math.round(wait / 1000)}s…`);
+    }
+    schedule(wait);
+  }
+
+  function scheduleSameTarget() {
     const wait = backoff.current;
     backoff.current = Math.min(BACKOFF_MAX, Math.round(backoff.current * 1.7));
     setStatusLabel(`Reconnecting in ${Math.round(wait / 1000)}s…`);
+    schedule(wait);
+  }
+
+  function schedule(wait) {
+    if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
     reconnectTimer.current = setTimeout(() => { if (want.current) open(); }, wait);
   }
 
@@ -212,15 +257,19 @@ export function useRemoteDesktop() {
     if (s) { try { s.onclose = null; s.onmessage = null; s.onerror = null; s.close(); } catch (e) {} }
   }
 
-  const connect = useCallback((host, port, password) => {
-    creds.current = { host: String(host || '').trim(), port: Number(port) || 8771, password: password || '' };
-    if (!creds.current.host) { setPhase('error'); setStatusLabel('Enter your computer’s address'); return; }
+  // Public: connect using an ordered list of targets [{url,label}] (LAN first, then relay).
+  const connect = useCallback((targetList, pass) => {
+    const list = (targetList || []).filter((x) => x && x.url);
+    if (list.length === 0) { setPhase('error'); setStatusLabel('Nothing to connect to'); return; }
+    password.current = pass || '';
+    targets.current = list;
+    idx.current = 0; triesInCycle.current = 0; backoff.current = BACKOFF_MIN;
     want.current = true;
-    backoff.current = BACKOFF_MIN;
     queue.current = [];
     bytesIn.current = 0; bytesOut.current = 0; frames.current = 0; bumpStats();
-    setFrameUri(null);
+    setFrameUri(null); setPaired(null);
     if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    if (attemptTimer.current) clearTimeout(attemptTimer.current);
     hardClose();
     open();
   }, [bumpStats]);
@@ -228,18 +277,63 @@ export function useRemoteDesktop() {
   const disconnect = useCallback(() => {
     want.current = false;
     if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    if (attemptTimer.current) clearTimeout(attemptTimer.current);
     hardClose();
     queue.current = [];
     setPhase('idle'); setStatusLabel('Not connected'); setFrameUri(null);
   }, []);
 
-  const setDataSaver = useCallback((on) => { sendInput({ cmd: 'set-data-saver', on: !!on }); }, [sendInput]);
-  const setGrayscale = useCallback((on) => { sendInput({ cmd: 'set-grayscale', on: !!on }); }, [sendInput]);
-  const sendClipboard = useCallback((text) => { sendInput({ cmd: 'clipboard-set', text: String(text || '') }); }, [sendInput]);
+  const setDataSaver = useCallback((on) => sendInput({ cmd: 'set-data-saver', on: !!on }), [sendInput]);
+  const setGrayscale = useCallback((on) => sendInput({ cmd: 'set-grayscale', on: !!on }), [sendInput]);
+  const sendClipboard = useCallback((text) => sendInput({ cmd: 'clipboard-set', text: String(text || '') }), [sendInput]);
   const requestClipboard = useCallback(() => { setClipboardText(null); sendInput({ cmd: 'clipboard-get' }); }, [sendInput]);
 
   return {
-    phase, statusLabel, frameUri, screen, mode, stats, clipboardText,
+    phase, statusLabel, frameUri, screen, mode, stats, clipboardText, paired,
     connect, disconnect, sendInput, setDataSaver, setGrayscale, sendClipboard, requestClipboard,
   };
+}
+
+// ---- helpers the screen uses to turn a scanned QR / saved computer into connect targets ----
+
+// Parse a scanned QR into connection info. The agent's dashboard shows two kinds:
+//   LAN   "http://192.168.1.50:8771"                           -> { lan:{host,port} }
+//   Relay "https://remote-control-xxx.pages.dev/?code=ABC123"  -> { code }
+export function parseQr(data) {
+  const s = String(data || '').trim();
+  if (!s) return null;
+  // bare "host:port" or "host"
+  if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?$/.test(s)) {
+    const [host, port] = s.split(':');
+    return { lan: { host, port: Number(port) || 8771 } };
+  }
+  let u;
+  try { u = new URL(s); } catch (e) { return null; }
+  const code = u.searchParams.get('code');
+  if (code) return { code: code.toUpperCase().trim() };
+  if (u.protocol === 'http:' || u.protocol === 'https:') {
+    if (u.hostname && (/^\d/.test(u.hostname) || u.hostname.endsWith('.local'))) {
+      return { lan: { host: u.hostname, port: Number(u.port) || 8771 } };
+    }
+  }
+  return null;
+}
+
+// Build the ordered target list for a saved computer: LAN first (fast, no data), then relay by
+// token (saved device), then relay by hostId (open access), across every relay base.
+export function targetsForComputer(c) {
+  const list = [];
+  if (c.lan && c.lan.host) list.push({ url: `ws://${c.lan.host}:${c.lan.port || 8771}/join`, label: 'Wi-Fi' });
+  for (const base of RELAY_BASES) {
+    if (c.relay && c.relay.token) list.push({ url: `${base}/join?token=${encodeURIComponent(c.relay.token)}`, label: 'Relay' });
+    if (c.id) list.push({ url: `${base}/join?hostId=${encodeURIComponent(c.id)}`, label: 'Relay' });
+  }
+  return list;
+}
+
+// Targets for a brand-new pairing straight from a scanned QR (before we know hostId/token).
+export function targetsForScan(info) {
+  if (info.lan) return [{ url: `ws://${info.lan.host}:${info.lan.port || 8771}/join`, label: 'Wi-Fi' }];
+  if (info.code) return RELAY_BASES.map((base) => ({ url: `${base}/join?code=${encodeURIComponent(info.code)}`, label: 'Relay' }));
+  return [];
 }
