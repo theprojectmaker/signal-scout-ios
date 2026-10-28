@@ -70,6 +70,7 @@ export function useRemoteDesktop() {
   const [stats, setStats] = useState({ bytesIn: 0, bytesOut: 0, frames: 0 });
   const [clipboardText, setClipboardText] = useState(null);
   const [paired, setPaired] = useState(null); // {hostId, deviceName, token} from the last 'joined'
+  const [views, setViews] = useState({ multiMonitor: false, current: null, list: [] }); // monitors
 
   const ws = useRef(null);
   const want = useRef(false);
@@ -156,6 +157,9 @@ export function useRemoteDesktop() {
         break;
       case 'mode':
         setMode({ dataSaver: !!msg.dataSaver, grayscale: !!msg.grayscale });
+        break;
+      case 'views':
+        setViews({ multiMonitor: !!msg.multiMonitor, current: msg.current ?? null, list: Array.isArray(msg.views) ? msg.views : [] });
         break;
       case 'clipboard':
         if (typeof msg.text === 'string') setClipboardText(msg.text);
@@ -287,10 +291,11 @@ export function useRemoteDesktop() {
   const setGrayscale = useCallback((on) => sendInput({ cmd: 'set-grayscale', on: !!on }), [sendInput]);
   const sendClipboard = useCallback((text) => sendInput({ cmd: 'clipboard-set', text: String(text || '') }), [sendInput]);
   const requestClipboard = useCallback(() => { setClipboardText(null); sendInput({ cmd: 'clipboard-get' }); }, [sendInput]);
+  const selectView = useCallback((view) => sendInput({ cmd: 'select-view', view }), [sendInput]);
 
   return {
-    phase, statusLabel, frameUri, screen, mode, stats, clipboardText, paired,
-    connect, disconnect, sendInput, setDataSaver, setGrayscale, sendClipboard, requestClipboard,
+    phase, statusLabel, frameUri, screen, mode, stats, clipboardText, paired, views,
+    connect, disconnect, sendInput, setDataSaver, setGrayscale, sendClipboard, requestClipboard, selectView,
   };
 }
 

@@ -91,20 +91,43 @@ export default function RemoteScreen() {
   const draggingRef = useRef(false);
   const longFiredRef = useRef(false);
   const scrolledRef = useRef(false);
-  const lastTwoYRef = useRef(null);
+  const pinchRef = useRef(null); // { dist, mx, my } between two-finger moves
   const lastMoveRef = useRef(0);
   const longTimer = useRef(null);
   const clearLong = () => { if (longTimer.current) { clearTimeout(longTimer.current); longTimer.current = null; } };
 
+  // Local zoom/pan of the received frame (like a real remote app). Transform on the Image is
+  // [{translateX},{translateY},{scale}] about its centre; toRemote() inverts exactly that.
+  const [zoom, setZoom] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const zoomRef = useRef(1); zoomRef.current = zoom;
+  const offsetRef = useRef({ x: 0, y: 0 }); offsetRef.current = offset;
+
+  const applyZP = useCallback((z, px, py) => {
+    const b = boxRef.current;
+    const nz = Math.max(1, Math.min(8, z));
+    const maxX = (nz - 1) * b.w / 2, maxY = (nz - 1) * b.h / 2;
+    const nx = Math.max(-maxX, Math.min(maxX, px));
+    const ny = Math.max(-maxY, Math.min(maxY, py));
+    zoomRef.current = nz; offsetRef.current = { x: nx, y: ny };
+    setZoom(nz); setOffset({ x: nx, y: ny });
+  }, []);
+
+  // reset zoom whenever the remote screen (or monitor) changes size
+  useEffect(() => { applyZP(1, 0, 0); }, [r.screen.w, r.screen.h, applyZP]);
+
   const toRemote = (lx, ly) => {
     const b = boxRef.current, sc = screenRef.current;
     if (!b.w || !b.h || !sc.w || !sc.h) return null;
+    const cx = b.w / 2, cy = b.h / 2, z = zoomRef.current, p = offsetRef.current;
+    const ux = cx + (lx - cx - p.x) / z; // undo pan+scale (origin = centre)
+    const uy = cy + (ly - cy - p.y) / z;
     const imgA = sc.w / sc.h, boxA = b.w / b.h;
     let dW, dH, offX, offY;
     if (boxA > imgA) { dH = b.h; dW = b.h * imgA; offX = (b.w - dW) / 2; offY = 0; }
     else { dW = b.w; dH = b.w / imgA; offX = 0; offY = (b.h - dH) / 2; }
-    const x = Math.max(0, Math.min(sc.w - 1, Math.round((lx - offX) / dW * sc.w)));
-    const y = Math.max(0, Math.min(sc.h - 1, Math.round((ly - offY) / dH * sc.h)));
+    const x = Math.max(0, Math.min(sc.w - 1, Math.round((ux - offX) / dW * sc.w)));
+    const y = Math.max(0, Math.min(sc.h - 1, Math.round((uy - offY) / dH * sc.h)));
     return { x, y };
   };
 
@@ -115,7 +138,7 @@ export default function RemoteScreen() {
       onPanResponderGrant: (e) => {
         const n = e.nativeEvent;
         startRef.current = { x: n.locationX, y: n.locationY };
-        draggingRef.current = false; longFiredRef.current = false; scrolledRef.current = false; lastTwoYRef.current = null;
+        draggingRef.current = false; longFiredRef.current = false; scrolledRef.current = false; pinchRef.current = null;
         const rc = toRemote(n.locationX, n.locationY);
         if (rc) sendRef.current({ cmd: 'move', x: rc.x, y: rc.y });
         clearLong();
@@ -126,13 +149,27 @@ export default function RemoteScreen() {
       onPanResponderMove: (e, g) => {
         const n = e.nativeEvent;
         if (g.numberActiveTouches >= 2) {
+          // two fingers: pinch = zoom (+ pan by the midpoint); parallel drag while NOT zoomed
+          // = scroll the remote; while zoomed = pan the view.
           clearLong(); scrolledRef.current = true;
-          const y = g.moveY;
-          if (lastTwoYRef.current == null) lastTwoYRef.current = y;
-          const d = y - lastTwoYRef.current;
-          if (Math.abs(d) >= 3) { sendRef.current({ cmd: 'wheel', delta: Math.round(-d * 2) }); lastTwoYRef.current = y; }
+          const ts = n.touches;
+          if (!ts || ts.length < 2) return;
+          const ax = ts[0].pageX, ay = ts[0].pageY, bx = ts[1].pageX, by = ts[1].pageY;
+          const dist = Math.hypot(ax - bx, ay - by);
+          const mx = (ax + bx) / 2, my = (ay + by) / 2;
+          const prev = pinchRef.current;
+          pinchRef.current = { dist, mx, my };
+          if (!prev) return;
+          const dScale = prev.dist ? dist / prev.dist : 1;
+          const dmx = mx - prev.mx, dmy = my - prev.my;
+          if (Math.abs(dist - prev.dist) > 4 || zoomRef.current > 1.01) {
+            applyZP(zoomRef.current * dScale, offsetRef.current.x + dmx, offsetRef.current.y + dmy);
+          } else if (Math.abs(dmy) >= 2) {
+            sendRef.current({ cmd: 'wheel', delta: Math.round(-dmy * 2) });
+          }
           return;
         }
+        if (scrolledRef.current) return; // a multi-touch gesture happened; don't also move the pointer
         const rc = toRemote(n.locationX, n.locationY);
         if (!rc) return;
         if (!draggingRef.current) {
@@ -152,9 +189,9 @@ export default function RemoteScreen() {
           const rc = toRemote(startRef.current.x, startRef.current.y);
           if (rc) sendRef.current({ cmd: 'click', x: rc.x, y: rc.y });
         }
-        draggingRef.current = false; lastTwoYRef.current = null;
+        draggingRef.current = false; pinchRef.current = null;
       },
-      onPanResponderTerminate: () => { clearLong(); if (draggingRef.current) sendRef.current({ cmd: 'up' }); draggingRef.current = false; lastTwoYRef.current = null; },
+      onPanResponderTerminate: () => { clearLong(); if (draggingRef.current) sendRef.current({ cmd: 'up' }); draggingRef.current = false; pinchRef.current = null; },
     })
   ).current;
 
@@ -222,11 +259,20 @@ export default function RemoteScreen() {
         </View>
 
         <View style={s.screenWrap} onLayout={(e) => { boxRef.current = { w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height }; }} {...pan.panHandlers}>
-          {r.frameUri ? <Image source={{ uri: r.frameUri }} style={s.frame} resizeMode="contain" fadeDuration={0} /> : <Text style={s.waiting}>Waiting for the first frame…</Text>}
+          {r.frameUri
+            ? <Image source={{ uri: r.frameUri }} style={[s.frame, { transform: [{ translateX: offset.x }, { translateY: offset.y }, { scale: zoom }] }]} resizeMode="contain" fadeDuration={0} />
+            : <Text style={s.waiting}>Waiting for the first frame…</Text>}
+          {zoom > 1.01 ? (
+            <Pressable style={s.resetZoom} onPress={() => applyZP(1, 0, 0)}><Text style={s.resetZoomTxt}>{Math.round(zoom * 100)}%  ✕</Text></Pressable>
+          ) : null}
         </View>
 
         <View style={s.controls}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chipRow}>
+            {r.views.multiMonitor ? r.views.list.map((v, i) => (
+              <Chip key={String(v.id)} t={t} active={r.views.current === v.id} label={`Screen ${i + 1}`} onPress={() => { r.selectView(v.id); applyZP(1, 0, 0); }} />
+            )) : null}
+            {r.views.multiMonitor ? <Chip t={t} active={r.views.current === 'full'} label="All screens" onPress={() => { r.selectView('full'); applyZP(1, 0, 0); }} /> : null}
             <Chip t={t} active={r.mode.dataSaver} label="Data-saver" onPress={() => r.setDataSaver(!r.mode.dataSaver)} />
             <Chip t={t} active={r.mode.grayscale} label="Gray" onPress={() => r.setGrayscale(!r.mode.grayscale)} />
             <Chip t={t} label="Keyboard" onPress={() => setKbOpen(true)} />
@@ -236,7 +282,7 @@ export default function RemoteScreen() {
             <Chip t={t} label="Send clip" onPress={sendClipFromPhone} />
             <Chip t={t} label="Get clip" onPress={r.requestClipboard} />
           </ScrollView>
-          <Text style={s.hint}>Tap = click · drag = move/drag · hold = right-click · two fingers = scroll</Text>
+          <Text style={s.hint}>Tap = click · drag = move · hold = right-click · pinch = zoom · two-finger drag = scroll / pan</Text>
         </View>
 
         <Modal visible={kbOpen} transparent animationType="slide" onRequestClose={() => setKbOpen(false)}>
@@ -386,6 +432,8 @@ const styles = (t) => StyleSheet.create({
   screenWrap: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   frame: { width: '100%', height: '100%' },
   waiting: { color: '#8E8E93', fontSize: 14 },
+  resetZoom: { position: 'absolute', right: 12, bottom: 12, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
+  resetZoomTxt: { color: '#fff', fontSize: 12, fontWeight: '700' },
 
   controls: { paddingVertical: 8, backgroundColor: t.bg, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.sep },
   chipRow: { paddingHorizontal: 12, gap: 8 },
