@@ -42,6 +42,15 @@ function RemoteIcon({ color }) {
   );
 }
 
+function BrowserIcon({ color }) {
+  return (
+    <Svg width={26} height={26} viewBox="0 0 24 24">
+      <Path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z" fill="none" stroke={color} strokeWidth={1.8} />
+      <Path d="M3 12h18M12 3c2.5 2.3 2.5 15.7 0 18M12 3c-2.5 2.3-2.5 15.7 0 18" fill="none" stroke={color} strokeWidth={1.6} />
+    </Svg>
+  );
+}
+
 function LightIcon({ color }) {
   return (
     <Svg width={26} height={26} viewBox="0 0 24 24">
@@ -70,6 +79,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="chat" options={{ title: 'Chat', tabBarIcon: ({ color }) => <ChatIcon color={color} /> }} />
       <Tabs.Screen name="photos" options={{ title: 'Photos', tabBarIcon: ({ color }) => <PhotosIcon color={color} /> }} />
       <Tabs.Screen name="remote" options={{ title: 'Remote', tabBarIcon: ({ color }) => <RemoteIcon color={color} /> }} />
+      <Tabs.Screen name="browser" options={{ title: 'Browser', tabBarIcon: ({ color }) => <BrowserIcon color={color} /> }} />
       <Tabs.Screen name="light" options={{ title: 'Light', tabBarIcon: ({ color }) => <LightIcon color={color} /> }} />
     </Tabs>
   );
