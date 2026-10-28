@@ -51,14 +51,14 @@ function stripRegion(bytes) {
   return bytes;
 }
 
-// The agent's own public relay domains (tests/remote-control agent.js RELAY_CANDIDATES). Stable
-// custom domains first, the drifting workers.dev subdomain last. A code/token works only on the
-// relay the host registered with, so we try each until one answers.
-export const RELAY_BASES = ['wss://remote.sitey.my', 'wss://remote.agentdomains.co', 'wss://remote.scriptly.workers.dev'];
+// The agent's own public relay domain (tests/remote-control agent.js RELAY_CANDIDATES). Only the
+// live one is listed — remote.sitey.my and remote.scriptly.workers.dev went dead (DNS ENOTFOUND),
+// and trying them just wasted seconds on a weak link. Keep this in sync with the agent.
+export const RELAY_BASES = ['wss://remote.agentdomains.co'];
 
 const BACKOFF_MIN = 800;
 const BACKOFF_MAX = 15000;
-const CONNECT_TIMEOUT = 8000; // give up on one target and try the next after this
+const CONNECT_TIMEOUT = 5000; // give up on one target and try the next after this (weak-link friendly)
 const MAX_QUEUE = 200;
 
 export function useRemoteDesktop() {
