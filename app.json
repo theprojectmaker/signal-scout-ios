@@ -72,7 +72,16 @@
           "cameraPermission": "Signal Scout uses the camera light for the flashlight."
         }
       ],
-      "expo-brightness"
+      "expo-brightness",
+      "expo-sharing",
+      [
+        "expo-nearby-connections",
+        {
+          "bonjourServicesName": "sigscout-share",
+          "localNetworkUsagePermissionText": "Signal Scout uses the local network to share files with a nearby device — no internet needed.",
+          "bluetoothUsagePermissionText": "Signal Scout uses Bluetooth to find and connect to a nearby device for offline file sharing."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false

@@ -51,6 +51,15 @@ function BrowserIcon({ color }) {
   );
 }
 
+function ShareIcon({ color }) {
+  return (
+    <Svg width={26} height={26} viewBox="0 0 24 24">
+      <Path d="M12 3v12M12 3l-4 4M12 3l4 4" fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+      <Path d="M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6" fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
 function LightIcon({ color }) {
   return (
     <Svg width={26} height={26} viewBox="0 0 24 24">
@@ -80,6 +89,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="photos" options={{ title: 'Photos', tabBarIcon: ({ color }) => <PhotosIcon color={color} /> }} />
       <Tabs.Screen name="remote" options={{ title: 'Remote', tabBarIcon: ({ color }) => <RemoteIcon color={color} /> }} />
       <Tabs.Screen name="browser" options={{ title: 'Browser', tabBarIcon: ({ color }) => <BrowserIcon color={color} /> }} />
+      <Tabs.Screen name="share" options={{ title: 'Share', tabBarIcon: ({ color }) => <ShareIcon color={color} /> }} />
       <Tabs.Screen name="light" options={{ title: 'Light', tabBarIcon: ({ color }) => <LightIcon color={color} /> }} />
     </Tabs>
   );
