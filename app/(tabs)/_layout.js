@@ -32,6 +32,16 @@ function PhotosIcon({ color }) {
   );
 }
 
+function RemoteIcon({ color }) {
+  return (
+    <Svg width={26} height={26} viewBox="0 0 24 24">
+      <Rect x="3" y="4" width="18" height="12" rx="1.6" fill="none" stroke={color} strokeWidth={1.8} />
+      <Path d="M9 20h6M12 16v4" stroke={color} strokeWidth={1.8} strokeLinecap="round" />
+      <Path d="M8.5 10.2a5 5 0 0 1 7 0M10.6 8.2a2 2 0 0 1 2.8 0" fill="none" stroke={color} strokeWidth={1.6} strokeLinecap="round" />
+    </Svg>
+  );
+}
+
 function LightIcon({ color }) {
   return (
     <Svg width={26} height={26} viewBox="0 0 24 24">
@@ -59,6 +69,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="index" options={{ title: 'Scout', tabBarIcon: ({ color }) => <ScoutIcon color={color} /> }} />
       <Tabs.Screen name="chat" options={{ title: 'Chat', tabBarIcon: ({ color }) => <ChatIcon color={color} /> }} />
       <Tabs.Screen name="photos" options={{ title: 'Photos', tabBarIcon: ({ color }) => <PhotosIcon color={color} /> }} />
+      <Tabs.Screen name="remote" options={{ title: 'Remote', tabBarIcon: ({ color }) => <RemoteIcon color={color} /> }} />
       <Tabs.Screen name="light" options={{ title: 'Light', tabBarIcon: ({ color }) => <LightIcon color={color} /> }} />
     </Tabs>
   );

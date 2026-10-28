@@ -147,7 +147,10 @@ function ChatsManager({ t }) {
   const activeIdRef = useRef(null);
   chatsRef.current = chats || [];
   activeIdRef.current = activeId;
-  const onPhotos = (usePathname() || '').startsWith('/photos');
+  // Unload the chat model on tabs that need the memory (Photos' vision model, Remote's live
+   // stream) — the phone holds only one heavy workload at a time.
+  const path = usePathname() || '';
+  const onHeavy = path.startsWith('/photos') || path.startsWith('/remote');
 
   useEffect(() => {
     (async () => {
@@ -188,11 +191,11 @@ function ChatsManager({ t }) {
 
   // On the Photos tab, unload the chat model so the vision model can load
   // (the phone holds only one model at a time).
-  if (onPhotos) {
+  if (onHeavy) {
     return (
       <ChatUI
         t={t} messages={[]} input="" setInput={() => {}} onSend={() => {}} onStop={() => {}}
-        generating={false} status={{ state: 'loading', label: 'Paused — using Photos' }}
+        generating={false} status={{ state: 'loading', label: 'Paused — free the memory' }}
         onDownload={() => {}} onPickExample={() => {}}
         title={active.title} chats={chats} activeChatId={activeId}
         onNewChat={onNewChat} onOpenChat={onOpenChat} onDeleteChat={onDeleteChat}
