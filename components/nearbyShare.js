@@ -79,57 +79,36 @@ export function useNearbyShare() {
       const myName = `${nk}~${id}`;
       pushLog(`me: ${nk} (${id.slice(0, 4)})`);
       try {
-        // The native module makes a SEPARATE peer id for advertising vs discovering, so doing both
-        // at once makes the invite target one identity while the accept uses the other -> peers
-        // find each other but never connect. Fix: hold ONE role at a time and hop between them with
-        // jitter; when two devices land in opposite roles the discoverer invites and the advertiser
-        // accepts, identities match, and they connect. Hopping stops once connected.
-        const setRole = async (r) => {
-          if (!AVAILABLE || !mounted.current || connectedRef.current) return;
-          roleRef.current = r;
-          try {
-            if (r === 'adv') { try { await NBC.stopDiscovery(); } catch (e) {} await NBC.startAdvertise(myName); pushLog('→ advertising'); }
-            else { try { await NBC.stopAdvertise(); } catch (e) {} await NBC.startDiscovery(myName); pushLog('→ searching'); }
-          } catch (e) { pushLog('role err: ' + (e && e.message)); }
-        };
-        const startHop = () => {
-          if (hopTimerRef.current) clearTimeout(hopTimerRef.current);
-          const tick = () => {
-            hopTimerRef.current = setTimeout(async () => {
-              if (mounted.current && !connectedRef.current) await setRole(roleRef.current === 'adv' ? 'disc' : 'adv');
-              if (mounted.current && !connectedRef.current) tick();
-            }, 2500 + Math.floor(Math.random() * 1500));
-          };
-          tick();
-        };
-
+        // With the native patch, advertising + discovery share one peer id + session, so both run
+        // at once and invite/accept identities match. The smaller device id invites; the other
+        // accepts (so they don't both invite at the same instant).
         subs.current.push(NBC.onPeerFound(({ peerId, name }) => {
-          // we only browse while in 'disc' role, so finding a peer = invite it (we're the discoverer)
-          pushLog(`found ${String(name).split('~')[0]} → inviting`);
-          NBC.requestConnection(peerId).then(() => pushLog('invite sent')).catch((e) => pushLog('invite err: ' + (e && e.message)));
+          const theirId = String(name || '').split('~').pop();
+          const initiate = deviceId.current < theirId;
+          pushLog(`found ${String(name).split('~')[0]} → ${initiate ? 'inviting' : 'await invite'}`);
+          if (initiate) NBC.requestConnection(peerId).then(() => pushLog('invite sent')).catch((e) => pushLog('invite err: ' + (e && e.message)));
         }));
         subs.current.push(NBC.onPeerLost(() => pushLog('peer lost')));
         subs.current.push(NBC.onInvitationReceived(({ peerId, name }) => {
-          // invitations only arrive while in 'adv' role = accept (we're the advertiser)
           pushLog(`invite from ${String(name).split('~')[0]} → accepting`);
           NBC.acceptConnection(peerId).then(() => pushLog('accepted')).catch((e) => pushLog('accept err: ' + (e && e.message)));
         }));
         subs.current.push(NBC.onConnected(({ peerId, name }) => {
           const nm = String(name || '').split('~')[0] || 'device';
-          connectedRef.current = true;
-          if (hopTimerRef.current) { clearTimeout(hopTimerRef.current); hopTimerRef.current = null; }
           peerRef.current = { id: peerId, name: nm }; setPeer({ id: peerId, name: nm });
           setStatus(`Connected to ${nm}`); pushLog(`CONNECTED to ${nm}`);
           flush();
         }));
         subs.current.push(NBC.onDisconnected(() => {
-          peerRef.current = null; setPeer(null); sendingRef.current = false; connectedRef.current = false;
-          if (mounted.current) { setStatus('Looking for nearby devices…'); pushLog('disconnected'); startHop(); }
+          peerRef.current = null; setPeer(null); sendingRef.current = false;
+          if (mounted.current) { setStatus('Looking for nearby devices…'); pushLog('disconnected'); }
         }));
         subs.current.push(NBC.onTextReceived(({ peerId, text }) => onText(peerId, text)));
 
-        await setRole(Math.random() < 0.5 ? 'adv' : 'disc'); // random start so two devices desync
-        startHop();
+        await NBC.startAdvertise(myName);
+        pushLog('advertising ✓');
+        await NBC.startDiscovery(myName);
+        pushLog('browsing ✓');
       } catch (e) { setStatus('Sharing unavailable on this device'); pushLog('start error: ' + (e && e.message)); }
     })();
     return () => {

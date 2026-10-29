@@ -39,6 +39,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Apply native patches (expo-nearby-connections fix)
+        run: npx patch-package
+
       - name: Check the token is set
         run: |
           if [ -z "$EXPO_TOKEN" ]; then echo "::error::Add the EXPO_TOKEN repository secret first"; exit 1; fi
