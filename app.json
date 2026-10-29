@@ -81,7 +81,8 @@
           "localNetworkUsagePermissionText": "Signal Scout uses the local network to share files with a nearby device — no internet needed.",
           "bluetoothUsagePermissionText": "Signal Scout uses Bluetooth to find and connect to a nearby device for offline file sharing."
         }
-      ]
+      ],
+      "./plugins/with-bonjour-udp.js"
     ],
     "experiments": {
       "typedRoutes": false
