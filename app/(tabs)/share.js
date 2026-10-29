@@ -1,5 +1,5 @@
 import React, { useCallback } from 'react';
-import { View, Text, Pressable, ScrollView, StyleSheet, TextInput, Alert } from 'react-native';
+import { View, Text, Pressable, ScrollView, StyleSheet, TextInput, Alert, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '../../components/theme';
 import { useNearbyShare } from '../../components/nearbyShare';
@@ -56,6 +56,13 @@ export default function ShareScreen() {
           ) : null}
         </View>
 
+        {n.log && n.log.length ? (
+          <View style={s.diag}>
+            <Text style={s.diagTitle}>Diagnostics (read this to me)</Text>
+            {n.log.slice(0, 12).map((line, i) => <Text key={i} style={s.diagLine}>{line}</Text>)}
+          </View>
+        ) : null}
+
         <View style={s.nameRow}>
           <Text style={s.nameLbl}>This device</Text>
           <TextInput style={s.nameIn} value={n.nick} onChangeText={n.saveNick} placeholder="Name this device" placeholderTextColor={t.label3} autoCapitalize="words" />
@@ -108,6 +115,9 @@ const styles = (t) => StyleSheet.create({
   progLbl: { color: t.label2, fontSize: 13 },
   track: { height: 6, borderRadius: 3, backgroundColor: t.fill, overflow: 'hidden' },
   fill: { height: 6, borderRadius: 3, backgroundColor: t.blue },
+  diag: { backgroundColor: t.fill, borderRadius: 10, padding: 10, gap: 2 },
+  diagTitle: { color: t.label2, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
+  diagLine: { color: t.label, fontSize: 11, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   nameLbl: { color: t.label2, fontSize: 13, fontWeight: '600' },
   nameIn: { flex: 1, backgroundColor: t.fill, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9, color: t.label, fontSize: 15 },

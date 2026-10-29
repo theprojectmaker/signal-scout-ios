@@ -45,6 +45,7 @@ export function useNearbyShare() {
   const [library, setLibrary] = useState([]);     // received files
   const [progress, setProgress] = useState(null); // { dir:'send'|'recv', name, pct }
   const [nick, setNick] = useState('');
+  const [log, setLog] = useState([]); // on-screen diagnostics
 
   const deviceId = useRef('');
   const peerRef = useRef(null);
@@ -56,6 +57,10 @@ export function useNearbyShare() {
 
   const setQ = (next) => { queueRef.current = next; setQueue(next); saveJSON(QUEUE_KEY, next); };
   const setLib = (next) => { setLibrary(next); saveJSON(LIB_KEY, next); };
+  const pushLog = useCallback((m) => {
+    const ts = new Date().toTimeString().slice(0, 8);
+    setLog((l) => [`${ts}  ${m}`, ...l].slice(0, 40));
+  }, []);
 
   // ---- lifecycle: advertise + discover while the tab is open ----
   useEffect(() => {
@@ -69,27 +74,36 @@ export function useNearbyShare() {
       setLib(await loadJSON(LIB_KEY, []));
       if (!AVAILABLE) return;
       const myName = `${nk}~${id}`;
+      pushLog(`me: ${nk} (${id.slice(0, 4)})`);
       try {
         subs.current.push(NBC.onPeerFound(({ peerId, name }) => {
           // one initiator: the smaller id requests, the other side auto-accepts the invite
           const theirId = String(name || '').split('~').pop();
-          if (deviceId.current < theirId) { NBC.requestConnection(peerId).catch(() => {}); }
+          const initiate = deviceId.current < theirId;
+          pushLog(`found ${String(name).split('~')[0]} → ${initiate ? 'inviting' : 'waiting for invite'}`);
+          if (initiate) { NBC.requestConnection(peerId).then(() => pushLog('invite sent')).catch((e) => pushLog('invite err: ' + e.message)); }
         }));
-        subs.current.push(NBC.onInvitationReceived(({ peerId }) => { NBC.acceptConnection(peerId).catch(() => {}); }));
+        subs.current.push(NBC.onPeerLost(({ peerId }) => pushLog('peer lost')));
+        subs.current.push(NBC.onInvitationReceived(({ peerId, name }) => {
+          pushLog(`invite from ${String(name).split('~')[0]} → accepting`);
+          NBC.acceptConnection(peerId).then(() => pushLog('accepted')).catch((e) => pushLog('accept err: ' + e.message));
+        }));
         subs.current.push(NBC.onConnected(({ peerId, name }) => {
           const nm = String(name || '').split('~')[0] || 'device';
           peerRef.current = { id: peerId, name: nm }; setPeer({ id: peerId, name: nm });
-          setStatus(`Connected to ${nm}`);
+          setStatus(`Connected to ${nm}`); pushLog(`CONNECTED to ${nm}`);
           flush();
         }));
         subs.current.push(NBC.onDisconnected(() => {
           peerRef.current = null; setPeer(null); sendingRef.current = false;
-          if (mounted.current) setStatus('Looking for nearby devices…');
+          if (mounted.current) { setStatus('Looking for nearby devices…'); pushLog('disconnected'); }
         }));
         subs.current.push(NBC.onTextReceived(({ peerId, text }) => onText(peerId, text)));
         await NBC.startAdvertise(myName, NBC.Strategy ? NBC.Strategy.P2P_CLUSTER : undefined);
+        pushLog('advertising ✓');
         await NBC.startDiscovery(myName, NBC.Strategy ? NBC.Strategy.P2P_CLUSTER : undefined);
-      } catch (e) { setStatus('Sharing unavailable on this device'); }
+        pushLog('browsing ✓');
+      } catch (e) { setStatus('Sharing unavailable on this device'); pushLog('start error: ' + (e && e.message)); }
     })();
     return () => {
       mounted.current = false;
@@ -198,5 +212,5 @@ export function useNearbyShare() {
 
   const saveNick = useCallback((v) => { setNick(v); AsyncStorage.setItem(NICK_KEY, v).catch(() => {}); }, []);
 
-  return { available, status, peer, queue, library, progress, nick, enqueueFile, removeQueued, removeLibrary, openFile, saveNick };
+  return { available, status, peer, queue, library, progress, nick, log, enqueueFile, removeQueued, removeLibrary, openFile, saveNick };
 }
