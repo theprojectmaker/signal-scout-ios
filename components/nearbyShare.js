@@ -54,6 +54,9 @@ export function useNearbyShare() {
   const rx = useRef({});          // id -> { name, mime, size, n, parts:[] }
   const subs = useRef([]);
   const mounted = useRef(true);
+  const roleRef = useRef('adv');      // current single role: 'adv' | 'disc'
+  const hopTimerRef = useRef(null);
+  const connectedRef = useRef(false);
 
   const setQ = (next) => { queueRef.current = next; setQueue(next); saveJSON(QUEUE_KEY, next); };
   const setLib = (next) => { setLibrary(next); saveJSON(LIB_KEY, next); };
@@ -76,37 +79,62 @@ export function useNearbyShare() {
       const myName = `${nk}~${id}`;
       pushLog(`me: ${nk} (${id.slice(0, 4)})`);
       try {
+        // The native module makes a SEPARATE peer id for advertising vs discovering, so doing both
+        // at once makes the invite target one identity while the accept uses the other -> peers
+        // find each other but never connect. Fix: hold ONE role at a time and hop between them with
+        // jitter; when two devices land in opposite roles the discoverer invites and the advertiser
+        // accepts, identities match, and they connect. Hopping stops once connected.
+        const setRole = async (r) => {
+          if (!AVAILABLE || !mounted.current || connectedRef.current) return;
+          roleRef.current = r;
+          try {
+            if (r === 'adv') { try { await NBC.stopDiscovery(); } catch (e) {} await NBC.startAdvertise(myName); pushLog('→ advertising'); }
+            else { try { await NBC.stopAdvertise(); } catch (e) {} await NBC.startDiscovery(myName); pushLog('→ searching'); }
+          } catch (e) { pushLog('role err: ' + (e && e.message)); }
+        };
+        const startHop = () => {
+          if (hopTimerRef.current) clearTimeout(hopTimerRef.current);
+          const tick = () => {
+            hopTimerRef.current = setTimeout(async () => {
+              if (mounted.current && !connectedRef.current) await setRole(roleRef.current === 'adv' ? 'disc' : 'adv');
+              if (mounted.current && !connectedRef.current) tick();
+            }, 2500 + Math.floor(Math.random() * 1500));
+          };
+          tick();
+        };
+
         subs.current.push(NBC.onPeerFound(({ peerId, name }) => {
-          // one initiator: the smaller id requests, the other side auto-accepts the invite
-          const theirId = String(name || '').split('~').pop();
-          const initiate = deviceId.current < theirId;
-          pushLog(`found ${String(name).split('~')[0]} → ${initiate ? 'inviting' : 'waiting for invite'}`);
-          if (initiate) { NBC.requestConnection(peerId).then(() => pushLog('invite sent')).catch((e) => pushLog('invite err: ' + e.message)); }
+          // we only browse while in 'disc' role, so finding a peer = invite it (we're the discoverer)
+          pushLog(`found ${String(name).split('~')[0]} → inviting`);
+          NBC.requestConnection(peerId).then(() => pushLog('invite sent')).catch((e) => pushLog('invite err: ' + (e && e.message)));
         }));
-        subs.current.push(NBC.onPeerLost(({ peerId }) => pushLog('peer lost')));
+        subs.current.push(NBC.onPeerLost(() => pushLog('peer lost')));
         subs.current.push(NBC.onInvitationReceived(({ peerId, name }) => {
+          // invitations only arrive while in 'adv' role = accept (we're the advertiser)
           pushLog(`invite from ${String(name).split('~')[0]} → accepting`);
-          NBC.acceptConnection(peerId).then(() => pushLog('accepted')).catch((e) => pushLog('accept err: ' + e.message));
+          NBC.acceptConnection(peerId).then(() => pushLog('accepted')).catch((e) => pushLog('accept err: ' + (e && e.message)));
         }));
         subs.current.push(NBC.onConnected(({ peerId, name }) => {
           const nm = String(name || '').split('~')[0] || 'device';
+          connectedRef.current = true;
+          if (hopTimerRef.current) { clearTimeout(hopTimerRef.current); hopTimerRef.current = null; }
           peerRef.current = { id: peerId, name: nm }; setPeer({ id: peerId, name: nm });
           setStatus(`Connected to ${nm}`); pushLog(`CONNECTED to ${nm}`);
           flush();
         }));
         subs.current.push(NBC.onDisconnected(() => {
-          peerRef.current = null; setPeer(null); sendingRef.current = false;
-          if (mounted.current) { setStatus('Looking for nearby devices…'); pushLog('disconnected'); }
+          peerRef.current = null; setPeer(null); sendingRef.current = false; connectedRef.current = false;
+          if (mounted.current) { setStatus('Looking for nearby devices…'); pushLog('disconnected'); startHop(); }
         }));
         subs.current.push(NBC.onTextReceived(({ peerId, text }) => onText(peerId, text)));
-        await NBC.startAdvertise(myName, NBC.Strategy ? NBC.Strategy.P2P_CLUSTER : undefined);
-        pushLog('advertising ✓');
-        await NBC.startDiscovery(myName, NBC.Strategy ? NBC.Strategy.P2P_CLUSTER : undefined);
-        pushLog('browsing ✓');
+
+        await setRole(Math.random() < 0.5 ? 'adv' : 'disc'); // random start so two devices desync
+        startHop();
       } catch (e) { setStatus('Sharing unavailable on this device'); pushLog('start error: ' + (e && e.message)); }
     })();
     return () => {
       mounted.current = false;
+      if (hopTimerRef.current) { clearTimeout(hopTimerRef.current); hopTimerRef.current = null; }
       subs.current.forEach((u) => { try { u && u(); } catch (e) {} });
       subs.current = [];
       if (AVAILABLE) { try { NBC.stopAdvertise(); } catch (e) {} try { NBC.stopDiscovery(); } catch (e) {} }
