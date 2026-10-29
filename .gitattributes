@@ -1,0 +1,3 @@
+# patch-package patches must stay LF or they won't apply on the macOS build runner
+patches/** text eol=lf
+*.patch text eol=lf
