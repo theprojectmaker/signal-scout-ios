@@ -36,8 +36,8 @@ export default function MoreScreen() {
           <Text style={s.helpTitle}>Send your son’s homework to the iPad</Text>
           <Text style={s.helpStep}>1. At lunch (with signal), open the Classroom email and the homework file.</Text>
           <Text style={s.helpStep}>2. Tap the attachment → Share → <Text style={s.b}>Save to Files</Text>.</Text>
-          <Text style={s.helpStep}>3. Open <Text style={s.b}>Share</Text> here → <Text style={s.b}>Send a file</Text> → pick it. It waits in the queue.</Text>
-          <Text style={s.helpStep}>4. Back at work (no signal needed), open this app near the iPad with Share open on it — the file sends itself and lands in the iPad’s library.</Text>
+          <Text style={s.helpStep}>3. Open <Text style={s.b}>Share</Text> here → <Text style={s.b}>Send a file</Text> → pick it.</Text>
+          <Text style={s.helpStep}>4. In the share sheet, <Text style={s.b}>AirDrop</Text> it to the iPad (nearby + unlocked). Works with no signal — it lands in the iPad’s Files.</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
