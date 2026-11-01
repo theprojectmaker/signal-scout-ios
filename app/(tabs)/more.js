@@ -7,6 +7,7 @@ import { useTheme } from '../../components/theme';
 const TOOLS = [
   { route: '/browser', icon: '🌐', title: 'Browser', sub: 'Browse online, save pages to read with no signal' },
   { route: '/notes', icon: '📝', title: 'Notes', sub: 'Jot things down, saved offline on your phone' },
+  { route: '/tools', icon: '🧮', title: 'Tools', sub: 'Calculator and unit converter, fully offline' },
   { route: '/photos', icon: '📷', title: 'Photos', sub: 'Ask the on-device AI about a photo' },
   { route: '/light', icon: '🔦', title: 'Light', sub: 'Flashlight, colored signal light, and SOS' },
 ];

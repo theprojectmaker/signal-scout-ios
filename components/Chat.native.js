@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePathname } from 'expo-router';
 import ChatUI from './ChatUI';
@@ -34,7 +34,11 @@ class Boundary extends React.Component {
    the on-screen transcript; the model stays resident. */
 function ModelChat({ t, active, activeChatId, chats, persistMessages, onNewChat, onOpenChat, onDeleteChat }) {
   const { models, useLLMChatSession } = require('react-native-executorch');
-  const llm = useLLMChatSession(models.llm.QWEN3_1_7B.DEFAULT, {
+  // iPads tend to have less usable RAM than iPhones and the full 1.7B model gets killed on load,
+  // so fall back to the much smaller Qwen3-0.6B there (weaker, but it actually loads).
+  const smallLLM = models.llm.QWEN3_0_6B && (models.llm.QWEN3_0_6B.DEFAULT || models.llm.QWEN3_0_6B.XNNPACK_8DA4W);
+  const MODEL = (Platform.OS === 'ios' && Platform.isPad && smallLLM) ? smallLLM : models.llm.QWEN3_1_7B.DEFAULT;
+  const llm = useLLMChatSession(MODEL, {
     initialMessages: [{ role: 'system', content: SYSTEM_PROMPT }],
     generationConfig: { maxNewTokens: 512, temperature: 0.7 },
   });

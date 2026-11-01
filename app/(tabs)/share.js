@@ -56,13 +56,6 @@ export default function ShareScreen() {
           ) : null}
         </View>
 
-        {n.log && n.log.length ? (
-          <View style={s.diag}>
-            <Text style={s.diagTitle}>Diagnostics (read this to me)</Text>
-            {n.log.slice(0, 12).map((line, i) => <Text key={i} style={s.diagLine}>{line}</Text>)}
-          </View>
-        ) : null}
-
         <View style={s.nameRow}>
           <Text style={s.nameLbl}>This device</Text>
           <TextInput style={s.nameIn} value={n.nick} onChangeText={n.saveNick} placeholder="Name this device" placeholderTextColor={t.label3} autoCapitalize="words" />
