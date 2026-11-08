@@ -356,6 +356,12 @@ export default function RemoteScreen() {
               : <Pressable style={s.primary} onPress={doConnect}><Text style={s.primaryTxt}>Connect</Text></Pressable>}
             {err ? <Text style={[s.status, { color: t.red }]}>{r.statusLabel}</Text> : null}
             {busy ? <Pressable onPress={() => { r.disconnect(); }}><Text style={s.cancel}>Cancel</Text></Pressable> : null}
+            {(busy || err) && r.clog && r.clog.length ? (
+              <View style={s.diag}>
+                <Text style={s.diagTitle}>Connection log (read this to me)</Text>
+                {r.clog.slice(0, 12).map((line, i) => <Text key={i} style={s.diagLine}>{line}</Text>)}
+              </View>
+            ) : null}
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -412,6 +418,9 @@ const styles = (t) => StyleSheet.create({
   primaryTxt: { color: t.onBlue, fontSize: 17, fontWeight: '600' },
   status: { color: t.label2, fontSize: 13 },
   busyRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  diag: { backgroundColor: t.fill, borderRadius: 10, padding: 10, gap: 2, marginTop: 6 },
+  diagTitle: { color: t.label2, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 2 },
+  diagLine: { color: t.label, fontSize: 11, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
   cancel: { textAlign: 'center', color: t.blue, fontSize: 15, marginTop: 4 },
 
   empty: { backgroundColor: t.card, borderRadius: 14, padding: 18 },

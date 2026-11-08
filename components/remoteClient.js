@@ -58,7 +58,9 @@ export const RELAY_BASES = ['wss://remote.agentdomains.co'];
 
 const BACKOFF_MIN = 800;
 const BACKOFF_MAX = 15000;
-const CONNECT_TIMEOUT = 5000; // give up on one target and try the next after this (weak-link friendly)
+const CONNECT_TIMEOUT = 14000; // give up on one target after this. Generous: the relay sign-in is a
+// multi-hop round trip (phone → relay → PC → back), which can take several seconds on a phone — 5s
+// was timing out mid-handshake and surfacing as "no answer".
 const MAX_QUEUE = 200;
 
 export function useRemoteDesktop() {
@@ -71,6 +73,8 @@ export function useRemoteDesktop() {
   const [clipboardText, setClipboardText] = useState(null);
   const [paired, setPaired] = useState(null); // {hostId, deviceName, token} from the last 'joined'
   const [views, setViews] = useState({ multiMonitor: false, current: null, list: [] }); // monitors
+  const [clog, setClog] = useState([]); // on-screen connect diagnostics
+  const pushC = useCallback((m) => setClog((l) => [`${new Date().toTimeString().slice(0, 8)} ${m}`, ...l].slice(0, 24)), []);
 
   const ws = useRef(null);
   const want = useRef(false);
@@ -130,19 +134,23 @@ export function useRemoteDesktop() {
   function handleJSON(msg) {
     switch (msg.type) {
       case 'joined':
+        pushC('joined' + (msg.token ? ' (+token)' : ''));
         setPaired({ hostId: msg.hostId || null, deviceName: msg.deviceName || null, token: msg.token || null });
         break;
       case 'need-auth':
+        pushC('need-auth → sending password');
         setPhase('authing'); setStatusLabel('Signing in…');
         rawSend({ cmd: 'auth', password: password.current });
         break;
       case 'authenticated':
+        pushC('AUTHENTICATED ✓');
         setPhase('ready'); setStatusLabel('Connected');
         rawSend({ cmd: 'set-data-saver', on: true });
         rawSend({ cmd: 'set-grayscale', on: true });
         flush();
         break;
       case 'auth-failed':
+        pushC('auth-failed (wrong password)');
         want.current = false; setPhase('error');
         setStatusLabel(`Wrong password${typeof msg.attemptsLeft === 'number' ? ` · ${msg.attemptsLeft} left` : ''}`);
         hardClose();
@@ -189,18 +197,21 @@ export function useRemoteDesktop() {
     const target = targets.current[idx.current % targets.current.length];
     setPhase('connecting');
     setStatusLabel(`Connecting${target.label ? ` · ${target.label}` : ''}…`);
+    const kind = target.url.includes('token=') ? 'relay token' : target.url.includes('hostId=') ? 'relay id'
+      : target.url.includes('code=') ? 'relay code' : target.url.startsWith('ws://') ? 'wi-fi' : 'relay';
+    pushC('try ' + kind);
     let sock;
-    try { sock = new WebSocket(target.url); } catch (e) { failTarget(); return; }
+    try { sock = new WebSocket(target.url); } catch (e) { pushC('open threw: ' + (e && e.message)); failTarget(); return; }
     sock.binaryType = 'arraybuffer';
     ws.current = sock;
     authedSock.current = false;
 
     if (attemptTimer.current) clearTimeout(attemptTimer.current);
     attemptTimer.current = setTimeout(() => {
-      if (ws.current === sock && !authedSock.current) { try { sock.close(); } catch (e) {} }
+      if (ws.current === sock && !authedSock.current) { pushC('timed out ' + (CONNECT_TIMEOUT / 1000) + 's'); try { sock.close(); } catch (e) {} }
     }, CONNECT_TIMEOUT);
 
-    sock.onopen = () => { /* wait for joined / need-auth */ };
+    sock.onopen = () => pushC('socket open');
     sock.onmessage = (evt) => {
       const d = evt.data;
       if (typeof d === 'string') {
@@ -219,8 +230,9 @@ export function useRemoteDesktop() {
         handleFrame(d);
       }
     };
-    sock.onerror = () => { /* onclose follows */ };
-    sock.onclose = () => {
+    sock.onerror = () => pushC('socket error');
+    sock.onclose = (e) => {
+      pushC('closed' + (e && e.code ? ' ' + e.code : '') + (authedSock.current ? ' (after auth)' : ''));
       if (ws.current === sock) ws.current = null;
       if (attemptTimer.current) { clearTimeout(attemptTimer.current); attemptTimer.current = null; }
       if (!want.current || !mounted.current) return;
@@ -294,7 +306,7 @@ export function useRemoteDesktop() {
   const selectView = useCallback((view) => sendInput({ cmd: 'select-view', view }), [sendInput]);
 
   return {
-    phase, statusLabel, frameUri, screen, mode, stats, clipboardText, paired, views,
+    phase, statusLabel, frameUri, screen, mode, stats, clipboardText, paired, views, clog,
     connect, disconnect, sendInput, setDataSaver, setGrayscale, sendClipboard, requestClipboard, selectView,
   };
 }
