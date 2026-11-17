@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { View, Text, Pressable, FlatList, StyleSheet, ActivityIndicator, ScrollView } from 'react-native';
+import { View, Text, Pressable, FlatList, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -180,7 +180,7 @@ export default function ProbeScreen() {
         </View>
       )}
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.btnRow} contentContainerStyle={s.btnRowInner}>
+      <View style={s.btnWrap}>
         {!running ? (
           <>
             <Btn s={s} t={t} primary label="Run all" onPress={() => run(probes)} />
@@ -191,15 +191,15 @@ export default function ProbeScreen() {
         ) : (
           <Btn s={s} t={t} danger label="Stop" onPress={stop} />
         )}
-      </ScrollView>
+      </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.filterRow} contentContainerStyle={s.btnRowInner}>
+      <View style={s.filterWrap}>
         {[['all', 'All'], ['ok', 'Reachable'], ['channels', '⭐ Channels'], ['blocked', 'Blocked']].map(([k, lbl]) => (
           <Pressable key={k} onPress={() => setFilter(k)} style={[s.chip, filter === k && s.chipOn]}>
             <Text style={[s.chipTxt, filter === k && s.chipTxtOn]}>{lbl}</Text>
           </Pressable>
         ))}
-      </ScrollView>
+      </View>
 
       <FlatList
         data={data}
@@ -247,10 +247,9 @@ const styles = (t) => StyleSheet.create({
   progTrack: { flex: 1, height: 6, borderRadius: 3, backgroundColor: t.fill, overflow: 'hidden' },
   progFill: { height: 6, backgroundColor: t.blue },
   progText: { fontSize: 12, color: t.label2, width: 72, textAlign: 'right' },
-  btnRow: { maxHeight: 48, flexGrow: 0 },
-  filterRow: { maxHeight: 44, flexGrow: 0 },
-  btnRowInner: { paddingHorizontal: 16, gap: 8, alignItems: 'center' },
-  btn: { backgroundColor: t.card, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 9 },
+  btnWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingTop: 2, paddingBottom: 4 },
+  filterWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingBottom: 10 },
+  btn: { backgroundColor: t.card, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10 },
   btnTxt: { color: t.label, fontSize: 14, fontWeight: '600' },
   chip: { backgroundColor: t.card, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 7 },
   chipOn: { backgroundColor: t.blue },
