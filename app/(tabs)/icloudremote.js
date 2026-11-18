@@ -409,8 +409,8 @@ export default function ICloudRemoteScreen() {
               <MenuItem s={s} label="Zoom out" onPress={doMenu(() => zoomBy(1 / 1.6))} />
               {zoom > 1.01 ? <MenuItem s={s} label="Reset zoom" onPress={doMenu(() => applyZP(1, 0, 0))} /> : null}
               <MenuItem s={s} label="📖 HD — read clearly (5s)" onPress={doMenu(() => fire('hd', {}, null, { label: 'HD boost' }))} />
-              <MenuItem s={s} label={sharp ? 'Picture: fast (for slow Wi-Fi)' : 'Picture: clear'} accent={sharp}
-                onPress={doMenu(() => { const n = !sharp; setSharp(n); fire('quality', { text: n ? 'fast' : 'clear' }, null, { label: n ? 'Fast picture' : 'Clear picture' }); })} />
+              <MenuItem s={s} label={sharp ? 'Picture: clear (slower)' : 'Picture: fast (fastest)'} accent={sharp}
+                onPress={doMenu(() => { const n = !sharp; setSharp(n); fire('quality', { text: n ? 'clear' : 'fast' }, null, { label: n ? 'Clear picture' : 'Fast picture' }); })} />
               {r.connected && !r.signedIn ? <MenuItem s={s} label="Sign in to control" onPress={doMenu(r.beginSignIn)} /> : null}
               <MenuItem s={s} label="Live Remote (faster, normal Wi-Fi)" onPress={doMenu(() => router.push('/remote'))} />
               <MenuItem s={s} label="Error log" onPress={doMenu(() => setLogOpen(true))} />
