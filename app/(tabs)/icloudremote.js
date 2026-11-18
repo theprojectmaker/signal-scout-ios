@@ -30,6 +30,7 @@ const KEY_GROUPS = [
   ['Function', [['F2', 'F2'], ['F3', 'F3'], ['F5', 'F5'], ['F11', 'F11'], ['F12', 'F12']]],
 ];
 const NAMES = { click: 'Click', dblclick: 'Double-click', rightclick: 'Right-click', move: 'Move', up: 'Drag', wheel: 'Scroll', type: 'Typing', key: 'Key', shot: 'Refresh', quality: 'Quality' };
+const PIC_LABEL = { fast: 'Fast (fastest)', clear: 'Clear (sharper)', text: 'Text (crisp code)' };
 const MARK_COLOR = { sending: '#0A84FF', sent: '#FF9F0A', unconfirmed: '#FF9F0A', done: '#30D158', failed: '#FF453B', timeout: '#FF453B' };
 const shortErr = (s) => String(s || '').replace(/^CloudKit \d+:\s*/, '').slice(0, 70);
 const MAX_ZOOM = 6;
@@ -49,7 +50,7 @@ export default function ICloudRemoteScreen() {
   const [barText, setBarText] = useState('');
   const [typed, setTyped] = useState('');
   const [dragMode, setDragMode] = useState(false);
-  const [sharp, setSharp] = useState(false);
+  const [picMode, setPicMode] = useState('fast');   // fast | clear | text (PC picture quality)
   const [precision, setPrecision] = useState(false);   // trackpad-style fine movement (opt-in)
   const precisionRef = useRef(false);
   useEffect(() => { precisionRef.current = precision; }, [precision]);
@@ -186,6 +187,14 @@ export default function ICloudRemoteScreen() {
   }, [commit, showToast]);
 
   useEffect(() => { settle(); }, [r.frame, settle]);          // a new frame may carry a receipt
+  // live fps estimate from frame arrivals over the last ~2s (shown in the status line)
+  const fpsRef = useRef([]);
+  useEffect(() => {
+    if (!r.frame || r.frame.cached) return;
+    const now = Date.now();
+    fpsRef.current = [...fpsRef.current.filter((x) => now - x < 2000), now];
+  }, [r.frame]);
+  const fps = fpsRef.current.length >= 3 ? Math.round(fpsRef.current.length / 2) : 0;
   const [, setTick] = useState(0);
   useEffect(() => {
     if (!r.connected) return undefined;
@@ -343,7 +352,7 @@ export default function ICloudRemoteScreen() {
   const sub = cachedOnly
     ? (r.connected ? 'reconnecting…' : 'tap to resume')
     : r.frame
-    ? (stale ? `frozen ${frameAgeS}s — check the PC bridge` : (frameAgeS <= 2 ? 'Live' : `Live · ${frameAgeS}s`))
+    ? (stale ? `frozen ${frameAgeS}s — check the PC bridge` : (frameAgeS <= 2 ? (fps >= 2 ? `Live · ${fps} fps` : 'Live') : `Live · ${frameAgeS}s`))
     : r.connected ? (errish ? 'can’t reach CloudKit' : 'waiting for your PC…') : 'not connected';
 
   return (
@@ -477,8 +486,8 @@ export default function ICloudRemoteScreen() {
               <MenuItem s={s} label="Refresh now" onPress={doMenu(() => fire('shot', {}, null, { label: 'Refresh' }))} />
               <MenuItem s={s} label="Type text…" onPress={doMenu(() => setKbOpen(true))} />
               {zoom > 1.01 ? <MenuItem s={s} label="Reset zoom" onPress={doMenu(() => applyZP(1, 0, 0))} /> : null}
-              <MenuItem s={s} label={sharp ? 'Picture: clear (slower)' : 'Picture: fast (fastest)'} accent={sharp}
-                onPress={doMenu(() => { const n = !sharp; setSharp(n); fire('quality', { text: n ? 'clear' : 'fast' }, null, { label: n ? 'Clear picture' : 'Fast picture' }); })} />
+              <MenuItem s={s} label={`Picture: ${PIC_LABEL[picMode]}`} accent={picMode !== 'fast'}
+                onPress={doMenu(() => { const order = ['fast', 'clear', 'text']; const n = order[(order.indexOf(picMode) + 1) % 3]; setPicMode(n); fire('quality', { text: n }, null, { label: `Picture: ${PIC_LABEL[n]}` }); })} />
               {r.connected && !r.signedIn ? <MenuItem s={s} label="Sign in to control" onPress={doMenu(r.beginSignIn)} /> : null}
               <MenuItem s={s} label="Live Remote (faster, normal Wi-Fi)" onPress={doMenu(() => router.push('/remote'))} />
               <MenuItem s={s} label="Error log" onPress={doMenu(() => setLogOpen(true))} />

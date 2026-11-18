@@ -58,20 +58,38 @@ async function ckPost(cfg, op, body, timeoutMs = 12000) {
 // The PC runs a command only if its seq is newer than the last it ran, so a command can never replay.
 const SLOTS = 16;
 const slotName = (room, seq) => `cmd-${room}-${seq % SLOTS}`;
-const frameName = (room) => `frame-${room}`;
+const frameName = (room) => `frame-${room}`;                       // legacy single frame record (back-compat)
+// Frame RING: the PC writes frames round-robin across these slots with several CloudKit writes in
+// flight at once, which is what lifts the ~1fps single-record ceiling toward ~6-8fps. We read all of
+// them (plus the legacy record) in ONE lookup-by-name and play them back through a small jitter buffer.
+// Ring records are the SAME schema as the legacy one (room, seq, ts, w, h, jpeg) — `ts` is the frame
+// order key and `seq` (negative) is still the delivery receipt — so there's no production schema change.
+const FRAME_RING = 8;
+const ringNames = (room) => Array.from({ length: FRAME_RING }, (_, i) => `frame-${room}-${i}`);
+const normNativeFrame = (r) => {
+  if (!r || !r.jpeg) return null;
+  const ts = Number(r.ts) || 0, seq = Number(r.seq) || 0;
+  return { jpeg: r.jpeg, w: Number(r.w) || 0, h: Number(r.h) || 0, ts, ack: seq < 0 ? -seq : 0 };
+};
+const normWebFrame = (rec) => {
+  const f = rec && rec.fields;
+  if (!f || !f.jpeg) return null;
+  const v = (k) => (f[k] ? f[k].value : undefined);
+  const ts = Number(v('ts')) || 0, seq = Number(v('seq')) || 0;
+  return { jpeg: v('jpeg'), w: Number(v('w')) || 0, h: Number(v('h')) || 0, ts, ack: seq < 0 ? -seq : 0 };
+};
 
-async function backendLatestFrame(cfg) {
+// Read every ring slot AND the legacy record in ONE lookup-by-name, return all frames found
+// (normalized, newest-first by ts). The caller dedupes by ts and buffers. Works whether the PC is a
+// new ring-writing bridge (8 fresh frames) or an old single-record one (just the legacy frame).
+async function backendRingFrames(cfg) {
+  const names = [...ringNames(cfg.room), frameName(cfg.room)];
   if (hasNativeCK) {
-    const recs = await nativeGet([frameName(cfg.room)]);
-    const r = recs && recs[0];
-    if (!r || !r.jpeg) return null;
-    return { jpeg: r.jpeg, w: Number(r.w) || 0, h: Number(r.h) || 0, ts: Number(r.ts) || Date.now(), seq: Number(r.seq) || 0 };
+    const recs = await nativeGet(names);                          // missing slots are simply omitted
+    return (recs || []).map(normNativeFrame).filter(Boolean).sort((a, b) => b.ts - a.ts);
   }
-  const resp = await ckPost(cfg, 'lookup', { records: [{ recordName: frameName(cfg.room) }] });
-  const rec = resp.records && resp.records[0];
-  if (!rec || !rec.fields || !rec.fields.jpeg) return null;       // NOT_FOUND → the PC hasn't published yet
-  const f = rec.fields;
-  return { jpeg: f.jpeg.value, w: f.w ? Number(f.w.value) : 0, h: f.h ? Number(f.h.value) : 0, ts: f.ts ? Number(f.ts.value) : Date.now(), seq: f.seq ? Number(f.seq.value) : 0 };
+  const resp = await ckPost(cfg, 'lookup', { records: names.map((n) => ({ recordName: n })) });
+  return (resp.records || []).map(normWebFrame).filter(Boolean).sort((a, b) => b.ts - a.ts);
 }
 async function backendWriteCmd(cfg, plain) {
   const name = slotName(cfg.room, plain.seq);
@@ -100,6 +118,9 @@ export function useICloudRemote() {
   const pollRef = useRef(null);
   const keepRef = useRef(null);
   const lastTsRef = useRef(0);
+  const bufRef = useRef([]);        // jitter buffer: frames fetched but not yet shown, oldest-first
+  const lastAckRef = useRef(0);     // highest delivery-receipt ack seen (shown on every played frame)
+  const playRef = useRef(null);     // playback timer that steps the buffer into view at a steady cadence
   const liveRef = useRef(false);   // have we received at least one frame this session
   const cfgRef = useRef(DEFAULT_CFG);
   const pollFrameRef = useRef(() => {});
@@ -183,31 +204,45 @@ export function useICloudRemote() {
     AsyncStorage.setItem(CFG_KEY, JSON.stringify(c)).catch(() => {});
   }, []);
 
+  // One lookup of the whole ring per poll. We don't show frames here — we ENQUEUE the new ones and let
+  // the playback timer step them out at a steady cadence, so a burst of ring writes becomes smooth
+  // motion instead of a stutter. (ack = delivery receipt: commands up to it have run on the PC.)
   const pollFrame = useCallback(async () => {
     const cfg = cfgRef.current;
     if (!cfg.container || !cfg.room || (!hasNativeCK && !cfg.token)) return;
     try {
-      const fr = await backendLatestFrame(cfg);
-      if (fr && fr.jpeg) {
-        if (fr.ts !== lastTsRef.current) {
-          lastTsRef.current = fr.ts;
-          // The PC bridge writes seq = -(newest command it has executed) as a delivery receipt.
-          // ack > 0  → this bridge reports receipts (every command with seq <= ack has run).
-          // ack = 0  → older bridge: it can't confirm, so the screen says "sent" rather than guess.
-          // rxAt = when THIS phone received the frame. Age is measured from this, never from the
-          // PC's clock (fr.ts), so clock skew can't make a fresh frame read as "1500s ago".
-          const withMeta = { ...fr, ack: fr.seq < 0 ? -fr.seq : 0, rxAt: Date.now(), kb: Math.round((fr.jpeg.length * 0.75) / 1024) };
-          setFrame(withMeta);
-          persistFrame(withMeta);   // cache so a reopen shows this screen instantly
-          if (!liveRef.current) { liveRef.current = true; pushLog('ok', `screen is live (${fr.w}×${fr.h}, ${hasNativeCK ? 'native' : 'web'})`); }
-        }
-        setStatus('connected');
-      } else { setStatus('waiting for your PC…'); }
+      const frames = await backendRingFrames(cfg);                 // newest-first; may be 1 (old bridge) or many
+      if (!frames.length) { setStatus('waiting for your PC…'); return; }
+      for (const f of frames) if (f.ack > lastAckRef.current) lastAckRef.current = f.ack;
+      const fresh = frames.filter((f) => f.ts > lastTsRef.current).sort((a, b) => a.ts - b.ts);   // oldest-first
+      if (fresh.length) {
+        lastTsRef.current = fresh[fresh.length - 1].ts;
+        const buf = bufRef.current.concat(fresh);
+        bufRef.current = buf.length > 8 ? buf.slice(-6) : buf;      // fell behind → skip to newest, cap latency
+      }
+      setStatus('connected');
     } catch (e) { fail(e.message || e); }
-  }, [pushLog, fail]);
+  }, [fail]);
 
   useEffect(() => { pollFrameRef.current = pollFrame; }, [pollFrame]);
   useEffect(() => { connectedRef.current = connected; }, [connected]);
+
+  // jitter buffer playback — step one buffered frame into the <Image> every ~110ms so bursty ring
+  // arrivals look like smooth motion. Empty buffer = nothing changes (the watchdog then nudges the PC).
+  useEffect(() => {
+    if (!connected) return undefined;
+    const id = setInterval(() => {
+      const buf = bufRef.current;
+      if (!buf.length) return;
+      const f = buf.shift();
+      const withMeta = { ...f, ack: lastAckRef.current, rxAt: Date.now(), kb: Math.round((f.jpeg.length * 0.75) / 1024) };
+      setFrame(withMeta);
+      persistFrame(withMeta);
+      if (!liveRef.current) { liveRef.current = true; pushLog('ok', `screen is live (${f.w}×${f.h}, ${hasNativeCK ? 'native' : 'web'})`); }
+    }, 110);
+    playRef.current = id;
+    return () => { clearInterval(id); playRef.current = null; };
+  }, [connected, persistFrame, pushLog]);
 
   // After an action, re-check for the new screenshot sooner than the steady poll. Rate-limited so a
   // stream of cursor moves can't turn into a flood of CloudKit queries.
@@ -270,12 +305,13 @@ export function useICloudRemote() {
     if (pollRef.current) clearInterval(pollRef.current);
     if (keepRef.current) clearInterval(keepRef.current);
     liveRef.current = false;
+    bufRef.current = []; lastTsRef.current = 0; lastAckRef.current = 0;   // fresh buffer each connect
     const c = cfgRef.current;
     setConnected(true); setStatus('connecting…');
     pushLog('info', `connecting · ${hasNativeCK ? 'native' : 'web'} · env ${c.env} · room ${c.room}`);
     pollFrame();
     sendCmd('shot');
-    pollRef.current = setInterval(pollFrame, 550);   // a by-name lookup is one cheap request; poll fast
+    pollRef.current = setInterval(pollFrame, 700);   // one lookup of the whole ring per tick (don't flood)
     lastKeepRef.current = Date.now();
     // Freshness watchdog + keepalive. Runs often and nudges the PC bridge with a 'shot' when the picture
     // has gone stale (so the age never silently climbs to "100s ago" — if frames stop, we actively ask
