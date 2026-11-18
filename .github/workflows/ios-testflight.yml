@@ -67,4 +67,4 @@ jobs:
 
       - name: Send to TestFlight
         if: ${{ inputs.submit }}
-        run: npx --yes eas-cli@latest submit --platform ios --profile production --path "$RUNNER_TEMP/app.ipa" --non-interactive --wait
+        run: npx --yes eas-cli@latest submit --platform ios --profile production --path "$RUNNER_TEMP/app.ipa" --non-interactive
