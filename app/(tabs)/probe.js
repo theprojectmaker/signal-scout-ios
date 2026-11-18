@@ -11,20 +11,25 @@ const CONCURRENCY = 64;     // 12k+ endpoints — run many at once (most non-res
 const TIMEOUT_MS = 5000;
 const ROW_H = 58;
 
-// Test one endpoint. Resolves 'ok' if the host answered at all (any HTTP status, or a
-// socket that opened), 'blocked' if it timed out / refused / errored. Reachable = a door.
+// Test one endpoint. 'ok' = the REAL host answered; 'portal' = we were redirected to a different host
+// (a captive-portal / filter login page — not a real reach); 'blocked' = timeout / refused / error.
+// A genuine internet round trip (DNS+TCP+TLS+HTTP) is basically never under ~20ms, so an "ok" that
+// fast is almost certainly a LOCAL block page the network injected — we flag it suspect, not trusted.
+const SUSPECT_MS = 20;
+function hostOf(u) { try { return new URL(u).host; } catch (e) { return ''; } }
+
 function testOne(p) {
   const start = Date.now();
   return new Promise((resolve) => {
     let done = false;
-    const finish = (status) => { if (done) return; done = true; resolve({ status, ms: Date.now() - start }); };
+    const finish = (status, extra) => { if (done) return; done = true; resolve({ status, ms: Date.now() - start, ...(extra || {}) }); };
 
     if (p.type === 'wss') {
       let ws;
       const timer = setTimeout(() => { try { ws && ws.close(); } catch (e) {} finish('blocked'); }, TIMEOUT_MS);
       try {
         ws = new WebSocket(p.url);
-        ws.onopen = () => { clearTimeout(timer); try { ws.close(); } catch (e) {} finish('ok'); };
+        ws.onopen = () => { clearTimeout(timer); const ms = Date.now() - start; try { ws.close(); } catch (e) {} finish('ok', { suspect: ms < SUSPECT_MS }); };
         ws.onerror = () => { clearTimeout(timer); finish('blocked'); };
         ws.onclose = (e) => { clearTimeout(timer); finish(e && e.code === 1000 ? 'ok' : 'blocked'); };
       } catch (e) { clearTimeout(timer); finish('blocked'); }
@@ -33,8 +38,15 @@ function testOne(p) {
 
     const ctrl = new AbortController();
     const timer = setTimeout(() => { try { ctrl.abort(); } catch (e) {} finish('blocked'); }, TIMEOUT_MS);
-    fetch(p.url, { method: 'GET', cache: 'no-store', signal: ctrl.signal })
-      .then(() => { clearTimeout(timer); finish('ok'); })
+    const target = hostOf(p.url);
+    fetch(p.url, { method: 'GET', cache: 'no-store', redirect: 'follow', signal: ctrl.signal })
+      .then((res) => {
+        clearTimeout(timer);
+        const ms = Date.now() - start;
+        const finalHost = hostOf(res.url || '');
+        if (res.redirected && finalHost && target && finalHost !== target) { finish('portal', { code: res.status, to: finalHost }); return; }
+        finish('ok', { code: res.status, suspect: ms < SUSPECT_MS });
+      })
       .catch(() => { clearTimeout(timer); finish('blocked'); });
   });
 }
@@ -95,51 +107,66 @@ export default function ProbeScreen() {
   }, []);
 
   const counts = useMemo(() => {
-    let ok = 0, blocked = 0, chan = 0;
+    let real = 0, chan = 0, suspect = 0, blocked = 0;
     for (const p of probes) {
       const r = results[p.id];
       if (!r) continue;
-      if (r.status === 'ok') { ok++; if (p.channel) chan++; }
+      if (r.status === 'ok' && !r.suspect) { real++; if (p.channel) chan++; }
+      else if ((r.status === 'ok' && r.suspect) || r.status === 'portal') suspect++;
       else if (r.status === 'blocked') blocked++;
     }
-    return { ok, blocked, chan, total: probes.length };
+    return { real, chan, suspect, blocked, total: probes.length };
   }, [results, probes]);
+
+  const isReal = useCallback((id) => results[id]?.status === 'ok' && !results[id]?.suspect, [results]);
+  const isSuspect = useCallback((id) => (results[id]?.status === 'ok' && results[id]?.suspect) || results[id]?.status === 'portal', [results]);
 
   const data = useMemo(() => {
     let list = probes;
-    if (filter === 'ok') list = probes.filter((p) => results[p.id]?.status === 'ok');
+    if (filter === 'ok') list = probes.filter((p) => isReal(p.id));
     else if (filter === 'blocked') list = probes.filter((p) => results[p.id]?.status === 'blocked');
-    else if (filter === 'channels') list = probes.filter((p) => p.channel && results[p.id]?.status === 'ok');
-    // reachable first, channels first within that
+    else if (filter === 'channels') list = probes.filter((p) => p.channel && isReal(p.id));
+    else if (filter === 'suspect') list = probes.filter((p) => isSuspect(p.id));
+    // genuinely reachable first, channels first within that
     return [...list].sort((a, b) => {
-      const ra = results[a.id]?.status === 'ok' ? 0 : 1;
-      const rb = results[b.id]?.status === 'ok' ? 0 : 1;
+      const ra = isReal(a.id) ? 0 : 1;
+      const rb = isReal(b.id) ? 0 : 1;
       if (ra !== rb) return ra - rb;
       if (a.channel !== b.channel) return a.channel ? -1 : 1;
       return 0;
     });
-  }, [probes, results, filter]);
+  }, [probes, results, filter, isReal, isSuspect]);
 
   const copyGreens = useCallback(async () => {
-    const greens = probes.filter((p) => results[p.id]?.status === 'ok');
-    const chans = greens.filter((p) => p.channel);
+    const real = probes.filter((p) => results[p.id]?.status === 'ok' && !results[p.id]?.suspect);
+    const chans = real.filter((p) => p.channel);
+    const suspects = probes.filter((p) => (results[p.id]?.status === 'ok' && results[p.id]?.suspect) || results[p.id]?.status === 'portal');
     const lines = [];
-    lines.push(`Signal Scout — Reachability results`);
-    lines.push(`Reachable: ${greens.length}/${probes.length}  ·  Channel-capable reachable: ${chans.length}`);
+    lines.push('Signal Scout — Reachability results');
+    lines.push(`Genuinely reachable: ${real.length}/${probes.length}  ·  channel-capable: ${chans.length}  ·  suspect (block page?): ${suspects.length}`);
     lines.push('');
     lines.push('== CHANNELS THAT WORK (can carry control) ==');
-    for (const p of chans) lines.push(`⭐ ${p.cat} — ${p.name} (${p.url})`);
+    for (const p of chans) lines.push(`⭐ ${p.cat} — ${p.name} (${p.url})  ${results[p.id].code || ''} ${results[p.id].ms}ms`);
     lines.push('');
-    lines.push('== OTHER REACHABLE ==');
-    for (const p of greens.filter((x) => !x.channel)) lines.push(`✓ ${p.cat} — ${p.name}`);
-    const text = lines.join('\n');
-    await Clipboard.setStringAsync(text);
+    lines.push('== OTHER GENUINELY REACHABLE ==');
+    for (const p of real.filter((x) => !x.channel)) lines.push(`✓ ${p.cat} — ${p.name}  ${results[p.id].ms}ms`);
+    lines.push('');
+    lines.push('== SUSPECT (likely the network\'s own block/login page, not a real reach) ==');
+    for (const p of suspects) lines.push(`⚠ ${p.name}  ${results[p.id].ms}ms${results[p.id].to ? ' → ' + results[p.id].to : ''}`);
+    await Clipboard.setStringAsync(lines.join('\n'));
   }, [probes, results]);
 
   const renderItem = useCallback(({ item }) => {
     const r = results[item.id];
-    const color = !r ? t.label3 : r.status === 'ok' ? t.green : r.status === 'testing' ? t.blue : t.red;
-    const label = !r ? '—' : r.status === 'ok' ? `✓ ${r.ms}ms` : r.status === 'testing' ? '…' : '✗';
+    const real = r && r.status === 'ok' && !r.suspect;
+    const suspect = r && ((r.status === 'ok' && r.suspect) || r.status === 'portal');
+    const color = !r ? t.label3 : real ? t.green : suspect ? '#FF9F0A' : r.status === 'testing' ? t.blue : t.red;
+    const label = !r ? '—'
+      : r.status === 'testing' ? '…'
+      : real ? `✓ ${r.code || ''} ${r.ms}ms`.replace('  ', ' ').trim()
+      : r.status === 'portal' ? '→ portal'
+      : (r.status === 'ok' && r.suspect) ? `⚠ ${r.ms}ms`
+      : '✗';
     return (
       <View style={s.row}>
         <View style={[s.dot, { backgroundColor: color }]} />
@@ -147,7 +174,9 @@ export default function ProbeScreen() {
           <Text style={s.rowTitle} numberOfLines={1}>
             {item.channel ? '⭐ ' : ''}{item.name}
           </Text>
-          <Text style={s.rowSub} numberOfLines={1}>{item.cat} · {item.type}</Text>
+          <Text style={s.rowSub} numberOfLines={1}>
+            {suspect ? (r.status === 'portal' ? `block/login page → ${r.to}` : 'likely a block page (too fast)') : `${item.cat} · ${item.type}`}
+          </Text>
         </View>
         <Text style={[s.stat, { color }]}>{label}</Text>
       </View>
@@ -161,17 +190,17 @@ export default function ProbeScreen() {
       <View style={s.head}>
         <Text style={s.title}>Reachability Lab</Text>
         <Text style={s.subtitle}>
-          {probes.length} real endpoints. Run this on the locked network — green ones are doors.
-          ⭐ marks services that could carry remote control. A full run takes a few minutes; most will
-          be blocked (that's expected on an Apple-only network) — watch for any surprise greens.
+          {probes.length} real endpoints. Green = genuinely reached; ⚠ amber = suspect (the network
+          likely answered with its own block/login page, not a real reach); red = blocked. ⭐ marks
+          services that could carry remote control. A full run takes a few minutes.
         </Text>
       </View>
 
       <View style={s.summary}>
-        <Stat s={s} n={counts.ok} label="Reachable" color={t.green} />
+        <Stat s={s} n={counts.real} label="Reachable" color={t.green} />
         <Stat s={s} n={counts.chan} label="⭐ Channels" color={t.blue} />
+        <Stat s={s} n={counts.suspect} label="⚠ Suspect" color="#FF9F0A" />
         <Stat s={s} n={counts.blocked} label="Blocked" color={t.red} />
-        <Stat s={s} n={counts.total} label="Total" color={t.label2} />
       </View>
 
       {running && (
@@ -195,7 +224,7 @@ export default function ProbeScreen() {
       </View>
 
       <View style={s.filterWrap}>
-        {[['all', 'All'], ['ok', 'Reachable'], ['channels', '⭐ Channels'], ['blocked', 'Blocked']].map(([k, lbl]) => (
+        {[['all', 'All'], ['ok', 'Reachable'], ['channels', '⭐ Channels'], ['suspect', '⚠ Suspect'], ['blocked', 'Blocked']].map(([k, lbl]) => (
           <Pressable key={k} onPress={() => setFilter(k)} style={[s.chip, filter === k && s.chipOn]}>
             <Text style={[s.chipTxt, filter === k && s.chipTxtOn]}>{lbl}</Text>
           </Pressable>
