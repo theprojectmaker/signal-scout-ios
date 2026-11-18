@@ -6,6 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useTheme } from '../../components/theme';
@@ -402,6 +403,7 @@ export default function RemoteScreen() {
 
         <Pressable style={s.primary} onPress={startScan}><Text style={s.primaryTxt}>Scan QR to add a computer</Text></Pressable>
         <Pressable onPress={addManual}><Text style={s.cancel}>Add by Wi-Fi address instead</Text></Pressable>
+        <Pressable onPress={() => router.push('/icloudremote')}><Text style={s.cancel}>On locked-down Wi-Fi? Use iCloud Remote</Text></Pressable>
       </ScrollView>
     </SafeAreaView>
   );

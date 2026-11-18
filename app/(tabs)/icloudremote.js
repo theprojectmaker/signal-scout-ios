@@ -6,6 +6,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import Svg, { Path } from 'react-native-svg';
+import { router } from 'expo-router';
 import { useTheme } from '../../components/theme';
 import { useICloudRemote, newRoom } from '../../components/icloudClient';
 
@@ -408,6 +409,7 @@ export default function ICloudRemoteScreen() {
               <MenuItem s={s} label={`Sharp picture: ${sharp ? 'ON' : 'off'}`} accent={sharp}
                 onPress={doMenu(() => { const n = !sharp; setSharp(n); fire('quality', { text: n ? 'sharp' : 'saver' }, null, { label: n ? 'Sharp picture' : 'Saver picture' }); })} />
               {r.connected && !r.signedIn ? <MenuItem s={s} label="Sign in to control" onPress={doMenu(r.beginSignIn)} /> : null}
+              <MenuItem s={s} label="Live Remote (faster, normal Wi-Fi)" onPress={doMenu(() => router.push('/remote'))} />
               <MenuItem s={s} label="Settings" onPress={doMenu(() => setSetupOpen(true))} />
               {r.connected
                 ? <MenuItem s={s} label="Disconnect" danger last onPress={doMenu(r.disconnect)} />
