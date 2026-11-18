@@ -65,6 +65,12 @@ const GROUPS = [
     'mdmenrollment.apple.com', 'deviceenrollment.apple.com', 'business.apple.com', 'school.apple.com',
     'gdmf.apple.com', 'cdn-apple.com', 'mzstatic.com', 'is1-ssl.mzstatic.com', 'smoot.apple.com',
   ]],
+  ['iCloud mailbox candidates (channels ⭐⭐)', true, 'https', [
+    'api.apple-cloudkit.com', 'cloudkit.icloud.com', 'gateway.icloud.com', 'p01-ckdatabase.icloud.com',
+    'p01-ckdatabasews.icloud.com', 'p01-ubiquityws.icloud.com', 'p01-docws.icloud.com', 'docws.icloud.com',
+    'p01-keyvalueservice.icloud.com', 'p01-contacts.icloud.com', 'p01-reminders.icloud.com',
+    'p01-notes.icloud.com', 'idmsa.apple.com', 'ckdatabasews.icloud.com', 'p01-fmf.icloud.com',
+  ]],
   ['Mesh VPN / zero-config (channels ⭐⭐)', true, 'https', [
     'controlplane.tailscale.com', 'login.tailscale.com', 'derp.tailscale.com', 'api.tailscale.com',
     'my.zerotier.com', 'my.zerotier.com', 'api.zerotier.com', 'download.zerotier.com',
