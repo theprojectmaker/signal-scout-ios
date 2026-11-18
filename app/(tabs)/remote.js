@@ -5,12 +5,16 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import * as Clipboard from 'expo-clipboard';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useTheme } from '../../components/theme';
 import { useRemoteDesktop, parseQr, targetsForComputer, targetsForScan } from '../../components/remoteClient';
 
 const COMPUTERS_KEY = 'remote.computers.v2';
+// Pre-configured personal build: this user's own PC + password are injected at build time
+// (app.config.js → extra.rc, from env secrets) so the app is ready on first launch.
+const RC_DEFAULTS = (Constants.expoConfig && Constants.expoConfig.extra && Constants.expoConfig.extra.rc) || {};
 
 // On-screen key buttons -> the agent's SPECIAL_KEY names (tests/remote-control/agent.js).
 const MACROS = [
@@ -44,7 +48,7 @@ export default function RemoteScreen() {
 
   // the connection the user is setting up (chosen saved computer, or a fresh scan)
   const [pendingName, setPendingName] = useState('');
-  const [password, setPassword] = useState('');
+  const [password, setPassword] = useState(RC_DEFAULTS.password || '');
   const pendingRef = useRef(null); // { targets, lan, existingId, save }
   const scannedOnce = useRef(false);
 
@@ -53,7 +57,15 @@ export default function RemoteScreen() {
   const [keysOpen, setKeysOpen] = useState(false);
   const [typed, setTyped] = useState('');
 
-  useEffect(() => { loadComputers().then(setComputers); }, []);
+  useEffect(() => {
+    loadComputers().then((list) => {
+      // seed the user's own PC the first time so it's there with no scanning
+      if ((!list || list.length === 0) && RC_DEFAULTS.hostId) {
+        const seeded = [{ id: RC_DEFAULTS.hostId, name: 'My PC', lan: null, relay: null, addedAt: Date.now() }];
+        persistComputers(seeded); setComputers(seeded);
+      } else { setComputers(list); }
+    });
+  }, []);
 
   // When a connection reports its stable identity, save/merge the computer so next time it's
   // one tap + password. We never store the password.
