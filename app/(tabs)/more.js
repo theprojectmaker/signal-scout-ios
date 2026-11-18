@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { useTheme } from '../../components/theme';
 
 const TOOLS = [
+  { route: '/icloudremote', icon: '🖥️', title: 'iCloud Remote', sub: 'Control your PC over iCloud — works on the locked Wi-Fi (slow but real)' },
   { route: '/probe', icon: '📡', title: 'Reachability Lab', sub: 'Test which services your network allows — find a way to connect' },
   { route: '/browser', icon: '🌐', title: 'Browser', sub: 'Browse online, save pages to read with no signal' },
   { route: '/notes', icon: '📝', title: 'Notes', sub: 'Jot things down, saved offline on your phone' },

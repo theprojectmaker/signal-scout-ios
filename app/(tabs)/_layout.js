@@ -104,6 +104,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="notes" options={{ href: null, title: 'Notes' }} />
       <Tabs.Screen name="tools" options={{ href: null, title: 'Tools' }} />
       <Tabs.Screen name="probe" options={{ href: null, title: 'Reachability Lab' }} />
+      <Tabs.Screen name="icloudremote" options={{ href: null, title: 'iCloud Remote' }} />
     </Tabs>
   );
 }
