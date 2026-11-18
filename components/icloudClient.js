@@ -55,6 +55,7 @@ export function useICloudRemote() {
   const pollRef = useRef(null);
   const lastTsRef = useRef(0);
   const cfgRef = useRef(DEFAULT_CFG);
+  const pollFrameRef = useRef(() => {});
 
   useEffect(() => {
     AsyncStorage.getItem(CFG_KEY).then((v) => {
@@ -102,6 +103,13 @@ export function useICloudRemote() {
     }
   }, []);
 
+  useEffect(() => { pollFrameRef.current = pollFrame; }, [pollFrame]);
+
+  // After any action, fetch fresh frames quickly instead of waiting for the steady poll.
+  const burstFrames = useCallback(() => {
+    [400, 1000, 1800, 2800].forEach((ms) => setTimeout(() => pollFrameRef.current(), ms));
+  }, []);
+
   const sendCmd = useCallback(async (kind, extra = {}) => {
     const cfg = cfgRef.current;
     if (!cfg.container || !cfg.token || !cfg.room) { setStatus('Set up iCloud first'); return; }
@@ -116,15 +124,16 @@ export function useICloudRemote() {
       await ckPost(cfg, 'modify', {
         operations: [{ operationType: 'create', record: { recordType: 'RCCmd', fields: f } }],
       });
+      burstFrames();
     } catch (e) { setStatus(String(e.message || e)); }
-  }, []);
+  }, [burstFrames]);
 
   const connect = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current);
     setConnected(true); setStatus('connecting…');
     pollFrame();
     sendCmd('shot');
-    pollRef.current = setInterval(pollFrame, 2500);
+    pollRef.current = setInterval(pollFrame, 1300);
   }, [pollFrame, sendCmd]);
 
   const disconnect = useCallback(() => {
