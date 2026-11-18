@@ -350,6 +350,12 @@ export default function ICloudRemoteScreen() {
               </>
             )}
             <Text style={s.emptyMeta}>{r.native ? 'native' : 'web'} · env {r.cfg.env} · room {r.cfg.room || '—'}</Text>
+            {!r.native ? (
+              <Text style={s.emptyWarn}>
+                This version signs in through Apple’s web login, whose token expires every few minutes, so it can’t be kept reliable.
+                Use the Remote tab (live, no sign-in) — or install the newest TestFlight build, which uses your iCloud account directly.
+              </Text>
+            ) : null}
           </View>
         )}
 
@@ -447,7 +453,7 @@ export default function ICloudRemoteScreen() {
             <View style={s.sheetHead}><Text style={s.sheetTitle}>Settings</Text><Pressable onPress={() => setSetupOpen(false)} hitSlop={8}><Text style={s.sheetDone}>Done</Text></Pressable></View>
             <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 10 }}>
               <Field s={s} label="CloudKit container" value={r.cfg.container} onChange={(v) => r.setCfg({ container: v.trim() })} placeholder="iCloud.com.solyapps.signalscout" />
-              {!r.native ? <Field s={s} label="API token (web path)" value={r.cfg.token} onChange={(v) => r.setCfg({ token: v.trim() })} placeholder="paste the ckAPIToken" /> : null}
+              {!r.native ? <Field s={s} label="API token (web path)" value={r.cfg.token} onChange={(v) => r.setCfg({ token: v.trim(), tokenManual: !!v.trim() })} placeholder="paste the ckAPIToken" /> : null}
               <View style={s.roomRow}>
                 <View style={s.flex}><Field s={s} label="Room code (must match the PC)" value={r.cfg.room} onChange={(v) => r.setCfg({ room: v.trim().toUpperCase() })} placeholder="SOLYPC" /></View>
                 <Pressable onPress={() => r.setCfg({ room: newRoom() })} style={s.genBtn}><Text style={s.genTxt}>New</Text></Pressable>
@@ -544,6 +550,7 @@ const styles = (t) => {
     emptyCode: { color: '#9bd94e', fontSize: 13, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginTop: 2 },
     emptyErr: { color: '#ff6b60', fontSize: 12, textAlign: 'center', lineHeight: 17, maxWidth: 300 },
     emptyMeta: { color: '#6a6a6a', fontSize: 11, marginTop: 10 },
+    emptyWarn: { color: '#e0b45a', fontSize: 12, textAlign: 'center', lineHeight: 17, maxWidth: 300, marginTop: 12 },
     bigBtn: { backgroundColor: t.blue, borderRadius: 12, paddingHorizontal: 34, paddingVertical: 13, marginTop: 14 },
     bigBtnTxt: { color: '#fff', fontSize: 16, fontWeight: '700' },
 

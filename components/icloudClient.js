@@ -23,6 +23,7 @@ const DEFAULT_CFG = {
   env: RC.env || 'production',           // native build uses prod CloudKit; keep web path aligned
   room: RC.room || 'SOLYPC',              // not secret — pairing room default
   webAuthToken: '',
+  tokenManual: false,                     // true only if the user pasted a token in Settings
 };
 
 const ckBase = (cfg, kind, op) => `https://api.apple-cloudkit.com/database/1/${encodeURIComponent(cfg.container)}/${encodeURIComponent(cfg.env || 'development')}/public/${kind}/${op}`;
@@ -105,6 +106,10 @@ export function useICloudRemote() {
       const c = { ...DEFAULT_CFG };
       for (const k of Object.keys(DEFAULT_CFG)) { if (stored[k] != null && stored[k] !== '') c[k] = stored[k]; }
       c.webAuthToken = stored.webAuthToken || DEFAULT_CFG.webAuthToken || '';
+      // CloudKit API tokens are per-environment. A token saved from an earlier version (e.g. the
+      // development one) must NOT override the right one for the current env — that mismatch is
+      // exactly what produced "auth failed". Only a token the user typed by hand is kept.
+      if (!stored.tokenManual) c.token = tokenForEnv(c.env) || c.token;
       cfgRef.current = c; setCfgState(c); setLoaded(true);
     }).catch(() => setLoaded(true));
   }, []);
