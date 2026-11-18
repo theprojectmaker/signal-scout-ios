@@ -91,10 +91,19 @@ export default function ICloudRemoteScreen() {
     })
   ).current;
 
+  // re-render once a second while connected so the "Ns ago" counter keeps moving
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!r.connected) return undefined;
+    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [r.connected]);
+
   const needsSetup = !r.cfg.container || !r.cfg.room || (!r.native && !r.cfg.token);
   const errish = /error|fail|401|403|AUTHENTICATION|unauthenticated|CloudKit \d/i.test(r.status || '');
   const frameAgeS = r.frame ? Math.max(0, Math.round((Date.now() - r.frame.ts) / 1000)) : null;
-  const live = r.connected && !!r.frame && !errish;
+  const stale = frameAgeS != null && frameAgeS > 40;   // PC has gone quiet (bridge stopped / PC asleep)
+  const live = r.connected && !!r.frame && !errish && !stale;
   const dotColor = errish ? t.red : live ? t.green : r.connected ? '#FF9F0A' : t.label3;
 
   const doMenu = (fn) => () => { setMenuOpen(false); setTimeout(fn, 60); };
@@ -106,7 +115,7 @@ export default function ICloudRemoteScreen() {
 
   const title = r.native ? 'native iCloud' : 'web iCloud';
   const sub = r.frame
-    ? `${r.frame.w}×${r.frame.h} · ${frameAgeS}s ago · ${r.cfg.env}`
+    ? (stale ? `last frame ${frameAgeS}s ago — is the PC bridge running?` : `${r.frame.w}×${r.frame.h} · ${frameAgeS}s ago · ${r.cfg.env}`)
     : r.connected ? (errish ? r.status : 'waiting for your PC…') : 'not connected';
 
   return (

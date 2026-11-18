@@ -86,6 +86,7 @@ export function useICloudRemote() {
   const [authUrl, setAuthUrl] = useState(null);
   const seqRef = useRef(Date.now());
   const pollRef = useRef(null);
+  const keepRef = useRef(null);
   const lastTsRef = useRef(0);
   const cfgRef = useRef(DEFAULT_CFG);
   const pollFrameRef = useRef(() => {});
@@ -171,14 +172,23 @@ export function useICloudRemote() {
 
   const connect = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current);
+    if (keepRef.current) clearInterval(keepRef.current);
     setConnected(true); setStatus('connecting…');
     pollFrame();
     sendCmd('shot');
     pollRef.current = setInterval(pollFrame, 1300);
+    // keepalive: tells the PC bridge a viewer is still here so it keeps polling fast and pushing
+    // frames. Only when we can actually write (native, or signed in on web) — otherwise a failing
+    // write would keep re-opening the Apple sign-in sheet.
+    keepRef.current = setInterval(() => {
+      const c = cfgRef.current;
+      if (hasNativeCK || c.webAuthToken) sendCmd('shot');
+    }, 25000);
   }, [pollFrame, sendCmd]);
 
   const disconnect = useCallback(() => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    if (keepRef.current) { clearInterval(keepRef.current); keepRef.current = null; }
     setConnected(false); setStatus('');
   }, []);
 
@@ -190,7 +200,10 @@ export function useICloudRemote() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded]);
 
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (keepRef.current) clearInterval(keepRef.current);
+  }, []);
 
   return {
     cfg, loaded, connected, status, frame, authUrl,
