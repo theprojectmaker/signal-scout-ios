@@ -1,8 +1,17 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { View, Text, Pressable, TextInput, ScrollView, StyleSheet, Image, PanResponder } from 'react-native';
+import { View, Text, Pressable, TextInput, ScrollView, StyleSheet, Image, PanResponder, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { WebView } from 'react-native-webview';
 import { useTheme } from '../../components/theme';
 import { useICloudRemote, newRoom } from '../../components/icloudClient';
+
+// Captures the ckWebAuthToken whether CloudKit returns it in the URL or via postMessage.
+const CAPTURE_JS = `(function(){
+  function grab(h){ var m=(h||'').match(/[?&#]ckWebAuthToken=([^&#]+)/); if(m){ window.ReactNativeWebView.postMessage(JSON.stringify({t:'cwt',v:decodeURIComponent(m[1])})); return true; } return false; }
+  grab(location.href);
+  window.addEventListener('message', function(ev){ try{ var d=typeof ev.data==='string'?JSON.parse(ev.data):ev.data; if(d&&d.ckWebAuthToken){ window.ReactNativeWebView.postMessage(JSON.stringify({t:'cwt',v:d.ckWebAuthToken})); } }catch(e){} });
+}()); true;`;
+function tokenFromUrl(u) { const m = (u || '').match(/[?&#]ckWebAuthToken=([^&#]+)/); return m ? decodeURIComponent(m[1]) : null; }
 
 export default function ICloudRemoteScreen() {
   const t = useTheme();
@@ -93,7 +102,17 @@ export default function ICloudRemoteScreen() {
             <View style={s.flex}><Field s={s} label="Room code (must match the PC)" value={r.cfg.room} onChange={(v) => r.setCfg({ room: v.trim().toUpperCase() })} placeholder="ABC123" /></View>
             <Pressable onPress={() => r.setCfg({ room: newRoom() })} style={s.genBtn}><Text style={s.genTxt}>New</Text></Pressable>
           </View>
-          <Text style={s.hint}>Run icloud-agent.js on your PC with the same container, token and room. Steps are in ICLOUD-REMOTE-SETUP.md.</Text>
+          <View style={s.envRow}>
+            <Text style={s.fieldLabel}>Environment (must match the PC)</Text>
+            <View style={s.envBtns}>
+              {['development', 'production'].map((ev) => (
+                <Pressable key={ev} onPress={() => r.setCfg({ env: ev })} style={[s.envBtn, r.cfg.env === ev && s.envBtnOn]}>
+                  <Text style={[s.envTxt, r.cfg.env === ev && s.envTxtOn]}>{ev === 'development' ? 'Development' : 'Production'}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+          <Text style={s.hint}>Run icloud-agent.js on your PC with the same container, room and environment. Steps are in ICLOUD-REMOTE-SETUP.md.</Text>
         </View>
       )}
 
@@ -120,6 +139,13 @@ export default function ICloudRemoteScreen() {
           <Btn s={s} t={t} label="▼ Scroll" onPress={() => scroll(120)} />
         </View>
 
+        {r.connected && !r.signedIn && (
+          <View style={s.signRow}>
+            <Btn s={s} t={t} primary label="Sign in to control" onPress={r.beginSignIn} />
+            <Text style={s.signHint}>You can see the screen now — sending taps needs a one-time Apple sign-in.</Text>
+          </View>
+        )}
+
         <View style={s.typeRow}>
           <TextInput
             style={s.input}
@@ -143,6 +169,24 @@ export default function ICloudRemoteScreen() {
           ))}
         </View>
       </ScrollView>
+
+      <Modal visible={!!r.authUrl} animationType="slide" onRequestClose={() => r.completeSignIn(null)}>
+        <SafeAreaView style={s.authSafe} edges={['top']}>
+          <View style={s.authHead}>
+            <Text style={s.authTitle}>Sign in to iCloud</Text>
+            <Pressable onPress={() => r.completeSignIn(null)}><Text style={s.authClose}>Close</Text></Pressable>
+          </View>
+          {r.authUrl ? (
+            <WebView
+              source={{ uri: r.authUrl }}
+              injectedJavaScript={CAPTURE_JS}
+              onMessage={(e) => { try { const d = JSON.parse(e.nativeEvent.data); if (d.t === 'cwt' && d.v) r.completeSignIn(d.v); } catch (err) {} }}
+              onShouldStartLoadWithRequest={(req) => { const tk = tokenFromUrl(req.url); if (tk) { r.completeSignIn(tk); return false; } return true; }}
+              onNavigationStateChange={(nav) => { const tk = tokenFromUrl(nav.url); if (tk) r.completeSignIn(tk); }}
+            />
+          ) : null}
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -181,6 +225,18 @@ const styles = (t) => StyleSheet.create({
   genBtn: { backgroundColor: t.blue, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 9 },
   genTxt: { color: '#fff', fontWeight: '600' },
   hint: { color: t.label3, fontSize: 11, lineHeight: 16 },
+  envRow: { gap: 6 },
+  envBtns: { flexDirection: 'row', gap: 8 },
+  envBtn: { flex: 1, backgroundColor: t.fill, borderRadius: 8, paddingVertical: 9, alignItems: 'center' },
+  envBtnOn: { backgroundColor: t.blue },
+  envTxt: { color: t.label2, fontSize: 13, fontWeight: '600' },
+  envTxtOn: { color: '#fff' },
+  signRow: { gap: 6 },
+  signHint: { color: t.label3, fontSize: 11, lineHeight: 15 },
+  authSafe: { flex: 1, backgroundColor: t.bg },
+  authHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.sep },
+  authTitle: { color: t.label, fontSize: 16, fontWeight: '700' },
+  authClose: { color: t.blue, fontSize: 16, fontWeight: '600' },
   screenBox: { flex: 1, margin: 16, marginBottom: 6, backgroundColor: '#000', borderRadius: 12, overflow: 'hidden', minHeight: 180 },
   ph: { color: '#888', fontSize: 14 },
   badge: { position: 'absolute', top: 8, right: 8, backgroundColor: t.blue, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },

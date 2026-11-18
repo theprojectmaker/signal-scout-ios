@@ -13,12 +13,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const CFG_KEY = 'icloud_remote_cfg_v1';
-const DEFAULT_CFG = { container: '', token: '', env: 'production', room: '' };
+const DEFAULT_CFG = { container: '', token: '', env: 'development', room: '', webAuthToken: '' };
 
+const ckBase = (cfg, kind, op) => `https://api.apple-cloudkit.com/database/1/${encodeURIComponent(cfg.container)}/${encodeURIComponent(cfg.env || 'development')}/public/${kind}/${op}`;
 function ckUrl(cfg, op) {
-  const c = encodeURIComponent(cfg.container);
-  const e = encodeURIComponent(cfg.env || 'production');
-  return `https://api.apple-cloudkit.com/database/1/${c}/${e}/public/records/${op}?ckAPIToken=${encodeURIComponent(cfg.token)}`;
+  // Reads (query) work with just the apiToken (World = read). Writes (modify) need a signed-in
+  // user — CloudKit forbids World write — so append the ckWebAuthToken captured at sign-in.
+  let u = `${ckBase(cfg, 'records', op)}?ckAPIToken=${encodeURIComponent(cfg.token)}`;
+  if (op === 'modify' && cfg.webAuthToken) u += `&ckWebAuthToken=${encodeURIComponent(cfg.webAuthToken)}`;
+  return u;
 }
 
 async function ckPost(cfg, op, body, timeoutMs = 12000) {
@@ -51,6 +54,7 @@ export function useICloudRemote() {
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState('');
   const [frame, setFrame] = useState(null);     // { jpeg, w, h, ts }
+  const [authUrl, setAuthUrl] = useState(null); // when set, the screen shows the Apple sign-in WebView
   const seqRef = useRef(Date.now());
   const pollRef = useRef(null);
   const lastTsRef = useRef(0);
@@ -110,6 +114,27 @@ export function useICloudRemote() {
     [400, 1000, 1800, 2800].forEach((ms) => setTimeout(() => pollFrameRef.current(), ms));
   }, []);
 
+  // CloudKit forbids World write, so sending commands needs a signed-in user. Fetch Apple's
+  // sign-in URL; the screen opens it in a WebView and hands the captured token to completeSignIn.
+  const beginSignIn = useCallback(async () => {
+    const cfg = cfgRef.current;
+    if (!cfg.container || !cfg.token) { setStatus('Set up iCloud first'); return; }
+    try {
+      const res = await fetch(`${ckBase(cfg, 'users', 'caller')}?ckAPIToken=${encodeURIComponent(cfg.token)}`, { method: 'GET' });
+      const text = await res.text(); let j; try { j = JSON.parse(text); } catch (e) { j = {}; }
+      if (j.redirectURL) { setAuthUrl(j.redirectURL); setStatus('sign in to control'); }
+      else if (res.ok) { setStatus('already signed in'); }
+      else { setStatus('sign-in unavailable: ' + (j.serverErrorCode || res.status)); }
+    } catch (e) { setStatus(String(e.message || e)); }
+  }, []);
+
+  const completeSignIn = useCallback((token) => {
+    if (!token) { setAuthUrl(null); return; }
+    setCfg({ webAuthToken: token });
+    setAuthUrl(null);
+    setStatus('signed in — controls ready');
+  }, [setCfg]);
+
   const sendCmd = useCallback(async (kind, extra = {}) => {
     const cfg = cfgRef.current;
     if (!cfg.container || !cfg.token || !cfg.room) { setStatus('Set up iCloud first'); return; }
@@ -125,8 +150,12 @@ export function useICloudRemote() {
         operations: [{ operationType: 'create', record: { recordType: 'RCCmd', fields: f } }],
       });
       burstFrames();
-    } catch (e) { setStatus(String(e.message || e)); }
-  }, [burstFrames]);
+    } catch (e) {
+      const m = String(e.message || e);
+      setStatus(m);
+      if (!cfgRef.current.webAuthToken && /AUTHENTICATION_REQUIRED|authentication|unauthenticated|\b401\b|\b421\b/i.test(m)) beginSignIn();
+    }
+  }, [burstFrames, beginSignIn]);
 
   const connect = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current);
@@ -143,5 +172,9 @@ export function useICloudRemote() {
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  return { cfg, loaded, connected, status, frame, setCfg, connect, disconnect, sendCmd, requestShot: () => sendCmd('shot') };
+  return {
+    cfg, loaded, connected, status, frame, authUrl, signedIn: !!cfg.webAuthToken,
+    setCfg, connect, disconnect, sendCmd, requestShot: () => sendCmd('shot'),
+    beginSignIn, completeSignIn,
+  };
 }
