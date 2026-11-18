@@ -45,6 +45,7 @@ export default function ICloudRemoteScreen() {
   const [keysOpen, setKeysOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [barText, setBarText] = useState('');
   const [typed, setTyped] = useState('');
   const [dragMode, setDragMode] = useState(false);
   const [sharp, setSharp] = useState(false);
@@ -394,6 +395,25 @@ export default function ICloudRemoteScreen() {
 
       <Text style={s.hint}>Move finger = move mouse · tap = click · hold = right-click · pinch = zoom · 2 fingers = pan</Text>
 
+      {/* persistent typing bar — tap it and the keyboard rises; type + Send goes to the PC */}
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <View style={s.typeBar}>
+          <TextInput
+            style={s.typeBarInput}
+            value={barText}
+            onChangeText={setBarText}
+            placeholder="Type to your PC…"
+            placeholderTextColor={t.label3}
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="send"
+            onSubmitEditing={() => { if (barText) { fire('type', { text: barText }, null, { label: 'Typing' }); setBarText(''); } }}
+          />
+          <Pressable style={s.typeBarIcon} onPress={() => setKeysOpen(true)}><Text style={s.typeBarIconTxt}>⌨</Text></Pressable>
+          <Pressable style={s.typeBarSend} onPress={() => { if (barText) { fire('type', { text: barText }, null, { label: 'Typing' }); setBarText(''); } }}><Text style={s.typeBarSendTxt}>Send</Text></Pressable>
+        </View>
+      </KeyboardAvoidingView>
+
       {/* ============ dropdown menu ============ */}
       <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
         <Pressable style={s.menuBackdrop} onPress={() => setMenuOpen(false)}>
@@ -404,6 +424,7 @@ export default function ICloudRemoteScreen() {
               <MenuItem s={s} label="Keys…" onPress={doMenu(() => setKeysOpen(true))} />
               <MenuItem s={s} label="Scroll up" onPress={doMenu(() => fire('wheel', { dy: -240 }, null, { label: 'Scroll' }))} />
               <MenuItem s={s} label="Scroll down" onPress={doMenu(() => fire('wheel', { dy: 240 }, null, { label: 'Scroll' }))} />
+              <MenuItem s={s} label="Switch screen" onPress={doMenu(() => fire('view', {}, null, { label: 'Switch screen' }))} />
               <MenuItem s={s} label={`Drag mode: ${dragMode ? 'ON' : 'off'}`} accent={dragMode} onPress={doMenu(() => setDragMode((v) => !v))} />
               <MenuItem s={s} label="Zoom in" onPress={doMenu(() => zoomBy(1.6))} />
               <MenuItem s={s} label="Zoom out" onPress={doMenu(() => zoomBy(1 / 1.6))} />
@@ -571,7 +592,13 @@ const styles = (t) => {
     modeBadgeTxt: { color: '#fff', fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
     resetZoom: { position: 'absolute', right: 12, bottom: 12, backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
     resetZoomTxt: { color: '#fff', fontSize: 12, fontWeight: '700' },
-    toast: { position: 'absolute', left: 14, right: 14, bottom: 14, alignSelf: 'center', backgroundColor: 'rgba(40,40,44,0.92)', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
+    toast: { position: 'absolute', left: 14, right: 14, top: 10, alignSelf: 'center', backgroundColor: 'rgba(40,40,44,0.95)', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
+    typeBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingTop: 4, paddingBottom: 8, backgroundColor: t.bg },
+    typeBarInput: { flex: 1, backgroundColor: t.card, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 10, color: t.label, fontSize: 15, borderWidth: StyleSheet.hairlineWidth, borderColor: t.sep },
+    typeBarIcon: { paddingHorizontal: 6, paddingVertical: 6 },
+    typeBarIconTxt: { fontSize: 20 },
+    typeBarSend: { backgroundColor: t.blue, borderRadius: 999, paddingHorizontal: 18, paddingVertical: 10 },
+    typeBarSendTxt: { color: '#fff', fontSize: 15, fontWeight: '700' },
     toastOk: { backgroundColor: 'rgba(28,120,56,0.94)' },
     toastBad: { backgroundColor: 'rgba(170,40,32,0.95)' },
     toastTxt: { color: '#fff', fontSize: 13, fontWeight: '600', textAlign: 'center' },
