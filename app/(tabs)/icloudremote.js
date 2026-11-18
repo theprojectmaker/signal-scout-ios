@@ -1,5 +1,5 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
-import { View, Text, Pressable, TextInput, ScrollView, StyleSheet, Image, PanResponder, Modal } from 'react-native';
+import { View, Text, Pressable, TextInput, ScrollView, StyleSheet, Image, PanResponder, Modal, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { useTheme } from '../../components/theme';
@@ -85,9 +85,12 @@ export default function ICloudRemoteScreen() {
   const scroll = (dy) => r.sendCmd('wheel', { dy });
   // native mode authenticates as the device's iCloud account, so it needs no API token
   const needsSetup = !r.cfg.container || !r.cfg.room || (!r.native && !r.cfg.token);
+  const errish = /error|fail|401|403|AUTHENTICATION|unauthenticated|CloudKit \d/i.test(r.status || '');
+  const frameAgeS = r.frame ? Math.max(0, Math.round((Date.now() - r.frame.ts) / 1000)) : null;
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
+      <KeyboardAvoidingView style={s.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={s.head}>
         <Text style={s.title}>iCloud Remote</Text>
         <Pressable onPress={() => setShowSetup((v) => !v)} style={s.gear}><Text style={s.gearTxt}>⚙</Text></Pressable>
@@ -120,16 +123,29 @@ export default function ICloudRemoteScreen() {
       <View style={s.screenBox} onLayout={onBoxLayout} {...pan.panHandlers}>
         {r.frame ? (
           <Image source={{ uri: `data:image/jpeg;base64,${r.frame.jpeg}` }} style={s.fill} resizeMode="contain" />
+        ) : !r.connected ? (
+          <View style={[s.fill, s.center]}><Text style={s.ph}>Not connected — tap Connect</Text></View>
         ) : (
-          <View style={[s.fill, s.center]}>
-            <Text style={s.ph}>{r.connected ? (r.status || 'waiting for your PC…') : 'Not connected'}</Text>
+          <View style={[s.fill, s.center, { padding: 24 }]}>
+            {!errish && <ActivityIndicator color="#8a8a8a" />}
+            <Text style={s.emptyTitle}>{errish ? 'Can’t reach CloudKit' : 'Waiting for your PC…'}</Text>
+            {errish ? (
+              <Text style={s.emptyErr}>{r.status}</Text>
+            ) : (
+              <>
+                <Text style={s.emptyHint}>No screenshot yet. On your PC, make sure the normal Remote agent is running, then run:</Text>
+                <Text style={s.emptyCode}>node icloud-agent.js</Text>
+              </>
+            )}
+            <Text style={s.emptyMeta}>{r.native ? 'native' : 'web'} · env {r.cfg.env} · room {r.cfg.room || '—'}</Text>
           </View>
         )}
         {!!gesture && <View style={s.badge}><Text style={s.badgeTxt}>{gesture}</Text></View>}
       </View>
 
       <Text style={s.status} numberOfLines={1}>
-        {`${r.native ? 'native iCloud' : 'web iCloud'}`}{r.status ? ` · ${r.status}` : (r.frame ? ` · live ${r.frame.w}×${r.frame.h}` : '')}
+        {`${r.native ? 'native iCloud' : 'web iCloud'} · env ${r.cfg.env}`}
+        {r.frame ? ` · live ${r.frame.w}×${r.frame.h} · ${frameAgeS}s ago` : (r.status ? ` · ${r.status}` : '')}
       </Text>
 
       <ScrollView style={s.controls} contentContainerStyle={s.controlsInner} keyboardShouldPersistTaps="handled">
@@ -172,6 +188,7 @@ export default function ICloudRemoteScreen() {
           ))}
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
 
       <Modal visible={!!r.authUrl} animationType="slide" onRequestClose={() => r.completeSignIn(null)}>
         <SafeAreaView style={s.authSafe} edges={['top']}>
@@ -242,6 +259,11 @@ const styles = (t) => StyleSheet.create({
   authClose: { color: t.blue, fontSize: 16, fontWeight: '600' },
   screenBox: { flex: 1, margin: 16, marginBottom: 6, backgroundColor: '#000', borderRadius: 12, overflow: 'hidden', minHeight: 180 },
   ph: { color: '#888', fontSize: 14 },
+  emptyTitle: { color: '#d0d0d0', fontSize: 15, fontWeight: '600', marginTop: 10, textAlign: 'center' },
+  emptyHint: { color: '#8a8a8a', fontSize: 12, marginTop: 8, textAlign: 'center', lineHeight: 17 },
+  emptyCode: { color: '#9bd94e', fontSize: 13, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginTop: 6 },
+  emptyErr: { color: '#ff6b60', fontSize: 12, marginTop: 8, textAlign: 'center', lineHeight: 17 },
+  emptyMeta: { color: '#6a6a6a', fontSize: 11, marginTop: 12 },
   badge: { position: 'absolute', top: 8, right: 8, backgroundColor: t.blue, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   badgeTxt: { color: '#fff', fontSize: 11, fontWeight: '600' },
   status: { color: t.label3, fontSize: 11, paddingHorizontal: 20 },
