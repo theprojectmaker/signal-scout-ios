@@ -24,6 +24,14 @@ jobs:
     env:
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
       EAS_SKIP_AUTO_FINGERPRINT: '1'
+      # Per-user defaults baked in at build time (app.config.js reads these). The public repo
+      # never contains the password or token — only these secrets do. Unset ones fall back to
+      # the non-secret defaults in app.config.js.
+      RC_PASSWORD: ${{ secrets.RC_PASSWORD }}
+      RC_CLOUDKIT_TOKEN: ${{ secrets.RC_CLOUDKIT_TOKEN }}
+      RC_ROOM: ${{ secrets.RC_ROOM }}
+      RC_CK_ENV: ${{ secrets.RC_CK_ENV }}
+      RC_HOST_ID: ${{ secrets.RC_HOST_ID }}
     steps:
       - uses: actions/checkout@v4
 

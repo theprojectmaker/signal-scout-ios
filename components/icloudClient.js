@@ -1,38 +1,40 @@
-// iCloud Remote — CloudKit Web Services client (pure JS, no native module).
-// Both the iPad app and the home PC talk to the SAME CloudKit public database over HTTPS.
-// On the locked work network only Apple hosts (incl. api.apple-cloudkit.com) are reachable,
-// so this is the one channel that gets through. The PC runs icloud-agent.js at home.
+// iCloud Remote — talks to the SAME CloudKit public database two ways:
+//   • NATIVE (preferred): the built-in native module, as the device's iCloud account (_icloud).
+//     No token, no sign-in; uses ckdatabasews.icloud.com (confirmed reachable on the work network).
+//   • WEB fallback: CloudKit Web Services over HTTPS (api.apple-cloudkit.com). Reads use the API
+//     token (World = read); writes need a one-time Apple sign-in (World write is forbidden).
+// The PC runs icloud-agent.js at home and does the reverse. Which path is used is automatic.
 //
-// Record types (create these in CloudKit Console, World role = read+write, deploy to prod):
-//   RCCmd   : room(String) seq(Int64) kind(String) x(Double) y(Double) dx(Double) dy(Double) text(String) ts(Int64)
+//   RCCmd   : room(String) seq(Int64) kind(String) x/y/dx/dy(Double) text(String) ts(Int64)
 //   RCFrame : room(String) seq(Int64) jpeg(String base64) w(Int64) h(Int64) ts(Int64)
-//
-// The app writes RCCmd (commands) and reads the newest RCFrame (screenshot). The PC does the reverse.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
+import { hasNativeCK, nativeSave, nativeQuery } from './icloudNative';
 
+const RC = (Constants.expoConfig && Constants.expoConfig.extra && Constants.expoConfig.extra.rc) || {};
 const CFG_KEY = 'icloud_remote_cfg_v1';
-const DEFAULT_CFG = { container: '', token: '', env: 'development', room: '', webAuthToken: '' };
+const DEFAULT_CFG = {
+  container: RC.container || 'iCloud.com.solyapps.signalscout',
+  token: RC.cloudkitToken || '',          // secret: comes from env via app.config.js, else ⚙ paste
+  env: RC.env || 'development',
+  room: RC.room || 'SOLYPC',              // not secret — pairing room default
+  webAuthToken: '',
+};
 
 const ckBase = (cfg, kind, op) => `https://api.apple-cloudkit.com/database/1/${encodeURIComponent(cfg.container)}/${encodeURIComponent(cfg.env || 'development')}/public/${kind}/${op}`;
 function ckUrl(cfg, op) {
-  // Reads (query) work with just the apiToken (World = read). Writes (modify) need a signed-in
-  // user — CloudKit forbids World write — so append the ckWebAuthToken captured at sign-in.
   let u = `${ckBase(cfg, 'records', op)}?ckAPIToken=${encodeURIComponent(cfg.token)}`;
   if (op === 'modify' && cfg.webAuthToken) u += `&ckWebAuthToken=${encodeURIComponent(cfg.webAuthToken)}`;
   return u;
 }
-
 async function ckPost(cfg, op, body, timeoutMs = 12000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(ckUrl(cfg, op), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctrl.signal,
     });
     const text = await res.text();
     let json; try { json = JSON.parse(text); } catch (e) { json = { raw: text }; }
@@ -41,7 +43,32 @@ async function ckPost(cfg, op, body, timeoutMs = 12000) {
   } finally { clearTimeout(timer); }
 }
 
-// random short id for a pairing room
+// ---- backend (native preferred, web fallback) -------------------------------
+async function backendLatestFrame(cfg) {
+  if (hasNativeCK) {
+    const recs = await nativeQuery('RCFrame', cfg.room, 1);
+    const r = recs && recs[0];
+    if (!r || !r.jpeg) return null;
+    return { jpeg: r.jpeg, w: Number(r.w) || 0, h: Number(r.h) || 0, ts: Number(r.ts) || Date.now() };
+  }
+  const resp = await ckPost(cfg, 'query', {
+    query: {
+      recordType: 'RCFrame',
+      filterBy: [{ fieldName: 'room', comparator: 'EQUALS', fieldValue: { value: cfg.room } }],
+      sortBy: [{ fieldName: 'ts', ascending: false }],
+    }, resultsLimit: 1,
+  });
+  const rec = resp.records && resp.records[0];
+  if (!rec || !rec.fields || !rec.fields.jpeg) return null;
+  const f = rec.fields;
+  return { jpeg: f.jpeg.value, w: f.w ? Number(f.w.value) : 0, h: f.h ? Number(f.h.value) : 0, ts: f.ts ? Number(f.ts.value) : Date.now() };
+}
+async function backendWriteCmd(cfg, plain) {
+  if (hasNativeCK) return nativeSave('RCCmd', plain);
+  const f = {}; for (const k in plain) f[k] = { value: plain[k] };
+  return ckPost(cfg, 'modify', { operations: [{ operationType: 'create', record: { recordType: 'RCCmd', fields: f } }] });
+}
+
 export function newRoom() {
   const a = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
   let s = ''; for (let i = 0; i < 6; i++) s += a[Math.floor(Math.random() * a.length)];
@@ -53,8 +80,8 @@ export function useICloudRemote() {
   const [loaded, setLoaded] = useState(false);
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState('');
-  const [frame, setFrame] = useState(null);     // { jpeg, w, h, ts }
-  const [authUrl, setAuthUrl] = useState(null); // when set, the screen shows the Apple sign-in WebView
+  const [frame, setFrame] = useState(null);
+  const [authUrl, setAuthUrl] = useState(null);
   const seqRef = useRef(Date.now());
   const pollRef = useRef(null);
   const lastTsRef = useRef(0);
@@ -63,8 +90,12 @@ export function useICloudRemote() {
 
   useEffect(() => {
     AsyncStorage.getItem(CFG_KEY).then((v) => {
-      if (v) { try { const c = { ...DEFAULT_CFG, ...JSON.parse(v) }; cfgRef.current = c; setCfgState(c); } catch (e) {} }
-      setLoaded(true);
+      // start from the injected defaults; let any non-empty saved override win (⚙ edits persist)
+      const stored = v ? (() => { try { return JSON.parse(v); } catch (e) { return {}; } })() : {};
+      const c = { ...DEFAULT_CFG };
+      for (const k of Object.keys(DEFAULT_CFG)) { if (stored[k] != null && stored[k] !== '') c[k] = stored[k]; }
+      c.webAuthToken = stored.webAuthToken || DEFAULT_CFG.webAuthToken || '';
+      cfgRef.current = c; setCfgState(c); setLoaded(true);
     }).catch(() => setLoaded(true));
   }, []);
 
@@ -76,48 +107,26 @@ export function useICloudRemote() {
 
   const pollFrame = useCallback(async () => {
     const cfg = cfgRef.current;
-    if (!cfg.container || !cfg.token || !cfg.room) return;
+    if (!cfg.container || !cfg.room || (!hasNativeCK && !cfg.token)) return;
     try {
-      const r = await ckPost(cfg, 'query', {
-        query: {
-          recordType: 'RCFrame',
-          filterBy: [{ fieldName: 'room', comparator: 'EQUALS', fieldValue: { value: cfg.room } }],
-          sortBy: [{ fieldName: 'ts', ascending: false }],
-        },
-        resultsLimit: 1,
-      });
-      const rec = r.records && r.records[0];
-      if (rec && rec.fields && rec.fields.jpeg) {
-        const ts = rec.fields.ts ? Number(rec.fields.ts.value) : Date.now();
-        if (ts !== lastTsRef.current) {
-          lastTsRef.current = ts;
-          setFrame({
-            jpeg: rec.fields.jpeg.value,
-            w: rec.fields.w ? Number(rec.fields.w.value) : 0,
-            h: rec.fields.h ? Number(rec.fields.h.value) : 0,
-            ts,
-          });
-        }
+      const fr = await backendLatestFrame(cfg);
+      if (fr && fr.jpeg) {
+        if (fr.ts !== lastTsRef.current) { lastTsRef.current = fr.ts; setFrame(fr); }
         setStatus('connected');
-      } else {
-        setStatus('waiting for your PC…');
-      }
-    } catch (e) {
-      setStatus(String(e.message || e));
-    }
+      } else { setStatus('waiting for your PC…'); }
+    } catch (e) { setStatus(String(e.message || e)); }
   }, []);
 
   useEffect(() => { pollFrameRef.current = pollFrame; }, [pollFrame]);
 
-  // After any action, fetch fresh frames quickly instead of waiting for the steady poll.
   const burstFrames = useCallback(() => {
     [400, 1000, 1800, 2800].forEach((ms) => setTimeout(() => pollFrameRef.current(), ms));
   }, []);
 
-  // CloudKit forbids World write, so sending commands needs a signed-in user. Fetch Apple's
-  // sign-in URL; the screen opens it in a WebView and hands the captured token to completeSignIn.
+  // web path only: one-time Apple sign-in so the user can write (native doesn't need this).
   const beginSignIn = useCallback(async () => {
     const cfg = cfgRef.current;
+    if (hasNativeCK) return;
     if (!cfg.container || !cfg.token) { setStatus('Set up iCloud first'); return; }
     try {
       const res = await fetch(`${ckBase(cfg, 'users', 'caller')}?ckAPIToken=${encodeURIComponent(cfg.token)}`, { method: 'GET' });
@@ -131,29 +140,25 @@ export function useICloudRemote() {
   const completeSignIn = useCallback((token) => {
     if (!token) { setAuthUrl(null); return; }
     setCfg({ webAuthToken: token });
-    setAuthUrl(null);
-    setStatus('signed in — controls ready');
+    setAuthUrl(null); setStatus('signed in — controls ready');
   }, [setCfg]);
 
   const sendCmd = useCallback(async (kind, extra = {}) => {
     const cfg = cfgRef.current;
-    if (!cfg.container || !cfg.token || !cfg.room) { setStatus('Set up iCloud first'); return; }
+    if (!cfg.container || !cfg.room || (!hasNativeCK && !cfg.token)) { setStatus('Set up iCloud first'); return; }
     const seq = ++seqRef.current;
-    const f = {
-      room: { value: cfg.room }, seq: { value: seq }, kind: { value: kind },
-      x: { value: extra.x || 0 }, y: { value: extra.y || 0 },
-      dx: { value: extra.dx || 0 }, dy: { value: extra.dy || 0 },
-      text: { value: extra.text || '' }, ts: { value: Date.now() },
+    const plain = {
+      room: cfg.room, seq, kind,
+      x: extra.x || 0, y: extra.y || 0, dx: extra.dx || 0, dy: extra.dy || 0,
+      text: extra.text || '', ts: Date.now(),
     };
     try {
-      await ckPost(cfg, 'modify', {
-        operations: [{ operationType: 'create', record: { recordType: 'RCCmd', fields: f } }],
-      });
+      await backendWriteCmd(cfg, plain);
       burstFrames();
     } catch (e) {
       const m = String(e.message || e);
       setStatus(m);
-      if (!cfgRef.current.webAuthToken && /AUTHENTICATION_REQUIRED|authentication|unauthenticated|\b401\b|\b421\b/i.test(m)) beginSignIn();
+      if (!hasNativeCK && !cfgRef.current.webAuthToken && /AUTHENTICATION_REQUIRED|authentication|unauthenticated|\b401\b|\b421\b/i.test(m)) beginSignIn();
     }
   }, [burstFrames, beginSignIn]);
 
@@ -170,10 +175,19 @@ export function useICloudRemote() {
     setConnected(false); setStatus('');
   }, []);
 
+  // auto-connect on open when pre-configured
+  useEffect(() => {
+    if (!loaded || connected) return;
+    const c = cfgRef.current;
+    if (c.container && c.room && (hasNativeCK || c.token)) connect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
+
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
   return {
-    cfg, loaded, connected, status, frame, authUrl, signedIn: !!cfg.webAuthToken,
+    cfg, loaded, connected, status, frame, authUrl,
+    native: hasNativeCK, signedIn: hasNativeCK || !!cfg.webAuthToken,
     setCfg, connect, disconnect, sendCmd, requestShot: () => sendCmd('shot'),
     beginSignIn, completeSignIn,
   };

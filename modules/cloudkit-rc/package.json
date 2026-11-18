@@ -1,0 +1,7 @@
+{
+  "name": "cloudkit-rc",
+  "version": "1.0.0",
+  "description": "Native CloudKit public-DB bridge for iCloud Remote",
+  "main": "index.js",
+  "private": true
+}

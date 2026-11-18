@@ -83,7 +83,8 @@ export default function ICloudRemoteScreen() {
 
   const key = (k) => r.sendCmd('key', { text: k });
   const scroll = (dy) => r.sendCmd('wheel', { dy });
-  const needsSetup = !r.cfg.container || !r.cfg.token || !r.cfg.room;
+  // native mode authenticates as the device's iCloud account, so it needs no API token
+  const needsSetup = !r.cfg.container || !r.cfg.room || (!r.native && !r.cfg.token);
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
@@ -127,7 +128,9 @@ export default function ICloudRemoteScreen() {
         {!!gesture && <View style={s.badge}><Text style={s.badgeTxt}>{gesture}</Text></View>}
       </View>
 
-      <Text style={s.status} numberOfLines={1}>{r.status ? `· ${r.status}` : (r.frame ? `· live ${r.frame.w}×${r.frame.h}` : '')}</Text>
+      <Text style={s.status} numberOfLines={1}>
+        {`${r.native ? 'native iCloud' : 'web iCloud'}`}{r.status ? ` · ${r.status}` : (r.frame ? ` · live ${r.frame.w}×${r.frame.h}` : '')}
+      </Text>
 
       <ScrollView style={s.controls} contentContainerStyle={s.controlsInner} keyboardShouldPersistTaps="handled">
         <View style={s.btnRow}>
