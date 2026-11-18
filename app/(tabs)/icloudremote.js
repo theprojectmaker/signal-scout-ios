@@ -20,16 +20,16 @@ const CAPTURE_JS = `(function(){
 }()); true;`;
 function tokenFromUrl(u) { const m = (u || '').match(/[?&#]ckWebAuthToken=([^&#]+)/); return m ? decodeURIComponent(m[1]) : null; }
 
-// [label, name the PC agent understands]
-const KEYS = [
-  ['Enter', 'ENTER'], ['Backspace', 'BACKSPACE'], ['Tab', 'TAB'], ['Esc', 'ESC'],
-  ['↑', 'UP'], ['↓', 'DOWN'], ['←', 'LEFT'], ['→', 'RIGHT'],
-  ['Delete', 'DELETE'], ['Home', 'HOME'], ['End', 'END'], ['Win', 'WIN'],
-  ['Ctrl+C', 'CTRL+C'], ['Ctrl+V', 'CTRL+V'], ['Ctrl+Z', 'CTRL+Z'], ['Ctrl+A', 'CTRL+A'],
-  ['Alt+Tab', 'ALTTAB'], ['Task Mgr', 'TASKMGR'],
+// Keys grouped for the panel: [label, name the PC agent understands]. Combos follow the proven
+// CTRL+C / ALTTAB patterns; the bridge upper-cases anything it doesn't alias, so new keys pass through.
+const KEY_GROUPS = [
+  ['Basics', [['Enter', 'ENTER'], ['Backspace', 'BACKSPACE'], ['Tab', 'TAB'], ['Esc', 'ESC'], ['Delete', 'DELETE'], ['Space', 'SPACE']]],
+  ['Arrows & nav', [['↑', 'UP'], ['↓', 'DOWN'], ['←', 'LEFT'], ['→', 'RIGHT'], ['Home', 'HOME'], ['End', 'END'], ['PgUp', 'PAGEUP'], ['PgDn', 'PAGEDOWN']]],
+  ['Edit', [['Ctrl+C', 'CTRL+C'], ['Ctrl+V', 'CTRL+V'], ['Ctrl+X', 'CTRL+X'], ['Ctrl+Z', 'CTRL+Z'], ['Ctrl+Y', 'CTRL+Y'], ['Ctrl+A', 'CTRL+A'], ['Ctrl+S', 'CTRL+S'], ['Ctrl+F', 'CTRL+F']]],
+  ['Windows', [['Win', 'WIN'], ['Win+D', 'WIN+D'], ['Win+E', 'WIN+E'], ['Win+L', 'WIN+L'], ['Alt+Tab', 'ALTTAB'], ['Alt+F4', 'ALT+F4'], ['Task Mgr', 'TASKMGR'], ['PrtSc', 'PRINTSCREEN']]],
+  ['Function', [['F2', 'F2'], ['F3', 'F3'], ['F5', 'F5'], ['F11', 'F11'], ['F12', 'F12']]],
 ];
-
-const NAMES = { click: 'Click', rightclick: 'Right-click', move: 'Move', up: 'Drag', wheel: 'Scroll', type: 'Typing', key: 'Key', shot: 'Refresh', quality: 'Quality' };
+const NAMES = { click: 'Click', dblclick: 'Double-click', rightclick: 'Right-click', move: 'Move', up: 'Drag', wheel: 'Scroll', type: 'Typing', key: 'Key', shot: 'Refresh', quality: 'Quality' };
 const MARK_COLOR = { sending: '#0A84FF', sent: '#FF9F0A', unconfirmed: '#FF9F0A', done: '#30D158', failed: '#FF453B', timeout: '#FF453B' };
 const shortErr = (s) => String(s || '').replace(/^CloudKit \d+:\s*/, '').slice(0, 70);
 const MAX_ZOOM = 6;
@@ -50,6 +50,9 @@ export default function ICloudRemoteScreen() {
   const [typed, setTyped] = useState('');
   const [dragMode, setDragMode] = useState(false);
   const [sharp, setSharp] = useState(false);
+  const [precision, setPrecision] = useState(false);   // trackpad-style fine movement (opt-in)
+  const precisionRef = useRef(false);
+  useEffect(() => { precisionRef.current = precision; }, [precision]);
 
   // ---------- zoom / pan ----------
   const box = useRef({ w: 1, h: 1 });
@@ -78,15 +81,7 @@ export default function ICloudRemoteScreen() {
   useEffect(() => { frameRef.current = r.frame; }, [r.frame]);
   useEffect(() => { sendRef.current = r.sendCmd; }, [r.sendCmd]);
   useEffect(() => { dragModeRef.current = dragMode; }, [dragMode]);
-
-  // Auto-connect once when the screen first opens with a ready config, so reopening the app resumes
-  // the live stream on its own. Fires a single time per mount — a manual Disconnect is respected.
-  const autoConnectedRef = useRef(false);
-  useEffect(() => {
-    if (autoConnectedRef.current || !r.loaded) return;
-    const ready = r.cfg.container && r.cfg.room && (r.native || r.cfg.token);
-    if (ready && !r.connected) { autoConnectedRef.current = true; r.connect(); }
-  }, [r.loaded, r.cfg, r.native, r.connected, r.connect]);
+  // (auto-connect on open is handled inside the useICloudRemote hook)
 
   // box point → PC pixel, undoing zoom/pan then the letterbox
   const mapPt = useCallback((lx, ly) => {
@@ -115,6 +110,8 @@ export default function ICloudRemoteScreen() {
   // where the PC's mouse is headed, in PC pixels. It follows the finger INSTANTLY (no iCloud delay),
   // so you always see where the mouse will go; the real one catches up about a second later.
   const [cursor, setCursor] = useState(null);
+  const cursorRef = useRef(null);
+  useEffect(() => { cursorRef.current = cursor; }, [cursor]);
 
   const commit = useCallback(() => setMarks(marksRef.current.slice()), []);
   const showToast = useCallback((text, tone) => {
@@ -243,27 +240,43 @@ export default function ICloudRemoteScreen() {
         if (!g.tracking) {
           if (Math.abs(gs.dx) < 8 && Math.abs(gs.dy) < 8) return;
           g.moved = true; g.tracking = true; clearTimeout(g.longTimer);
+          if (precisionRef.current) {              // trackpad mode: carry the cursor from where it is
+            g.precPos = cursorRef.current || mapPt(g.start.lx, g.start.ly);
+            g.precPrev = { lx, ly };
+          }
           if (dragModeRef.current) {               // drag mode: grab at the start point, then carry it
-            const p0 = mapPt(g.start.lx, g.start.ly);
+            const p0 = precisionRef.current ? g.precPos : mapPt(g.start.lx, g.start.ly);
             if (p0) { rawSend('move', p0); rawSend('down', {}); }
           }
         }
         const p = mapPt(lx, ly);
         if (!p) return;
-        setCursor(p);                              // the on-screen pointer follows the finger with zero lag
+        let target = p;
+        if (precisionRef.current && g.precPos && g.precPrev) {
+          const pPrev = mapPt(g.precPrev.lx, g.precPrev.ly);
+          const f = frameRef.current;
+          if (pPrev && f) {
+            const GAIN = 2.6;                        // finger travels 2.6× the mouse → fine, steady control
+            const nx = Math.max(0, Math.min(f.w, g.precPos.x + (p.x - pPrev.x) / GAIN));
+            const ny = Math.max(0, Math.min(f.h, g.precPos.y + (p.y - pPrev.y) / GAIN));
+            target = { x: Math.round(nx), y: Math.round(ny) };
+            g.precPos = target; g.precPrev = { lx, ly };
+          }
+        }
+        setCursor(target);                           // the on-screen pointer follows with zero lag
         // the real mouse follows too — throttled, because every move is an iCloud write
         const now = Date.now(), L = g.last;
         if (L && (now - L.t < 300 || Math.hypot(lx - L.lx, ly - L.ly) < 4)) return;
         if (inflight.current > 4) return;          // back-pressure: don't pile up behind a slow link
         g.last = { t: now, lx, ly };
-        rawSend('move', p);
+        rawSend('move', target);
       },
       onPanResponderRelease: (e) => {
         clearTimeout(g.longTimer);
         const { locationX: lx, locationY: ly } = e.nativeEvent;
         if (g.multi) { g.pinch = null; g.multi = false; return; }
         if (g.tracking) {
-          const p = mapPt(lx, ly);
+          const p = (precisionRef.current && g.precPos) ? g.precPos : mapPt(lx, ly);
           if (dragModeRef.current) {
             if (p) rawSend('move', { ...p });
             fire('up', {}, { x: lx, y: ly }, { label: 'Drag' });
@@ -271,17 +284,28 @@ export default function ICloudRemoteScreen() {
             fire('move', { ...p, final: true }, { x: lx, y: ly }, { label: 'Move', quiet: true });
           }
           if (p) setCursor(p);
-          g.tracking = false;
+          g.tracking = false; g.precPos = null; g.precPrev = null;
           return;
         }
         if (g.longFired) return;                   // right-click already sent
-        const p = mapPt(g.start.lx, g.start.ly);
-        if (p) { setCursor(p); fire('click', p, { x: g.start.lx, y: g.start.ly }); }
+        // a tap: in precision mode it clicks where the cursor already sits (trackpad-style); otherwise
+        // where you tapped. Two quick taps in the same place = a real double-click (one PC command).
+        const p = (precisionRef.current && cursorRef.current) ? cursorRef.current : mapPt(g.start.lx, g.start.ly);
+        if (!p) return;
+        setCursor(p);
+        const now = Date.now(), lt = g.lastTap, at = { x: g.start.lx, y: g.start.ly };
+        if (lt && now - lt.t < 320 && Math.hypot(g.start.lx - lt.lx, g.start.ly - lt.ly) < 30) {
+          g.lastTap = null;
+          fire('dblclick', p, at, { label: 'Double-click' });
+        } else {
+          g.lastTap = { t: now, lx: g.start.lx, ly: g.start.ly };
+          fire('click', p, at);
+        }
       },
       onPanResponderTerminate: () => {
         clearTimeout(g.longTimer);
         if (g.tracking && dragModeRef.current) rawSend('up', {});
-        g.tracking = false; g.multi = false; g.pinch = null;
+        g.tracking = false; g.multi = false; g.pinch = null; g.precPos = null; g.precPrev = null;
       },
     })
   ).current;
@@ -315,12 +339,12 @@ export default function ICloudRemoteScreen() {
     setTyped('');
   };
 
-  const title = r.native ? 'native iCloud' : 'web iCloud';
+  const title = r.native ? 'iCloud Remote' : 'iCloud Remote · web';
   const sub = cachedOnly
-    ? (r.connected ? 'showing last screen · reconnecting…' : 'last screen · tap Connect to resume')
+    ? (r.connected ? 'reconnecting…' : 'tap to resume')
     : r.frame
-    ? (stale ? `last frame ${frameAgeS}s ago — is the PC bridge running?` : `${r.frame.w}×${r.frame.h} · ${r.frame.kb || '?'}KB · ${frameAgeS}s ago`)
-    : r.connected ? (errish ? r.status : 'waiting for your PC…') : 'not connected';
+    ? (stale ? `frozen ${frameAgeS}s — check the PC bridge` : (frameAgeS <= 2 ? 'Live' : `Live · ${frameAgeS}s`))
+    : r.connected ? (errish ? 'can’t reach CloudKit' : 'waiting for your PC…') : 'not connected';
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
@@ -397,7 +421,11 @@ export default function ICloudRemoteScreen() {
           </View>
         ) : null}
 
-        {dragMode ? <View style={s.modeBadge} pointerEvents="none"><Text style={s.modeBadgeTxt}>DRAG MODE</Text></View> : null}
+        {(dragMode || precision) ? (
+          <View style={s.modeBadge} pointerEvents="none">
+            <Text style={s.modeBadgeTxt}>{[dragMode && 'DRAG', precision && 'PRECISE'].filter(Boolean).join(' · ')}</Text>
+          </View>
+        ) : null}
         {zoom > 1.01 ? (
           <Pressable style={s.resetZoom} onPress={() => applyZP(1, 0, 0)}><Text style={s.resetZoomTxt}>{Math.round(zoom * 100)}%  ✕</Text></Pressable>
         ) : null}
@@ -408,7 +436,19 @@ export default function ICloudRemoteScreen() {
         ) : null}
       </View>
 
-      <Text style={s.hint}>Move finger = move mouse · tap = click · hold = right-click · pinch = zoom · 2 fingers = pan</Text>
+      {/* power dock — the common controls one tap away, instead of digging through the ••• menu */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.dock} contentContainerStyle={s.dockRow} keyboardShouldPersistTaps="handled">
+        <DockBtn s={s} glyph="⌨" label="Keys" onPress={() => setKeysOpen(true)} />
+        <DockBtn s={s} glyph="▲" label="Scroll" onPress={() => fire('wheel', { dy: -300 }, null, { label: 'Scroll up' })} />
+        <DockBtn s={s} glyph="▼" label="Scroll" onPress={() => fire('wheel', { dy: 300 }, null, { label: 'Scroll down' })} />
+        <DockBtn s={s} glyph="◎" label="Precise" on={precision} onPress={() => { const n = !precision; setPrecision(n); showToast(n ? 'Precision on — fine trackpad control' : 'Precision off', 'wait'); }} />
+        <DockBtn s={s} glyph="✋" label="Drag" on={dragMode} onPress={() => setDragMode((v) => !v)} />
+        <DockBtn s={s} glyph="＋" label="Zoom" onPress={() => zoomBy(1.6)} />
+        <DockBtn s={s} glyph="－" label="Zoom" onPress={() => zoomBy(1 / 1.6)} />
+        <DockBtn s={s} glyph="🖥" label="Screen" onPress={() => fire('view', {}, null, { label: 'Switch screen' })} />
+        <DockBtn s={s} glyph="📖" label="HD" onPress={() => fire('hd', {}, null, { label: 'HD boost' })} />
+        <DockBtn s={s} glyph="?" label="Gestures" onPress={() => showToast('Move = mouse · tap = click · double-tap = double-click · hold = right-click · pinch = zoom · 2 fingers = pan', 'wait')} />
+      </ScrollView>
 
       {/* persistent typing bar — tap it and the keyboard rises; type + Send goes to the PC */}
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -434,17 +474,9 @@ export default function ICloudRemoteScreen() {
         <Pressable style={s.menuBackdrop} onPress={() => setMenuOpen(false)}>
           <View style={[s.menuCard, { top: insets.top + 44, maxHeight: winH - insets.top - 110 }]}>
             <ScrollView bounces={false}>
-              <MenuItem s={s} label="Refresh" onPress={doMenu(() => fire('shot', {}, null, { label: 'Refresh' }))} />
+              <MenuItem s={s} label="Refresh now" onPress={doMenu(() => fire('shot', {}, null, { label: 'Refresh' }))} />
               <MenuItem s={s} label="Type text…" onPress={doMenu(() => setKbOpen(true))} />
-              <MenuItem s={s} label="Keys…" onPress={doMenu(() => setKeysOpen(true))} />
-              <MenuItem s={s} label="Scroll up" onPress={doMenu(() => fire('wheel', { dy: -240 }, null, { label: 'Scroll' }))} />
-              <MenuItem s={s} label="Scroll down" onPress={doMenu(() => fire('wheel', { dy: 240 }, null, { label: 'Scroll' }))} />
-              <MenuItem s={s} label="Switch screen" onPress={doMenu(() => fire('view', {}, null, { label: 'Switch screen' }))} />
-              <MenuItem s={s} label={`Drag mode: ${dragMode ? 'ON' : 'off'}`} accent={dragMode} onPress={doMenu(() => setDragMode((v) => !v))} />
-              <MenuItem s={s} label="Zoom in" onPress={doMenu(() => zoomBy(1.6))} />
-              <MenuItem s={s} label="Zoom out" onPress={doMenu(() => zoomBy(1 / 1.6))} />
               {zoom > 1.01 ? <MenuItem s={s} label="Reset zoom" onPress={doMenu(() => applyZP(1, 0, 0))} /> : null}
-              <MenuItem s={s} label="📖 HD — read clearly (5s)" onPress={doMenu(() => fire('hd', {}, null, { label: 'HD boost' }))} />
               <MenuItem s={s} label={sharp ? 'Picture: clear (slower)' : 'Picture: fast (fastest)'} accent={sharp}
                 onPress={doMenu(() => { const n = !sharp; setSharp(n); fire('quality', { text: n ? 'clear' : 'fast' }, null, { label: n ? 'Clear picture' : 'Fast picture' }); })} />
               {r.connected && !r.signedIn ? <MenuItem s={s} label="Sign in to control" onPress={doMenu(r.beginSignIn)} /> : null}
@@ -479,11 +511,18 @@ export default function ICloudRemoteScreen() {
         <Pressable style={s.keysBackdrop} onPress={() => setKeysOpen(false)}>
           <Pressable style={s.keysCard} onPress={() => {}}>
             <View style={s.sheetHead}><Text style={s.sheetTitle}>Keys</Text><Pressable onPress={() => setKeysOpen(false)} hitSlop={8}><Text style={s.sheetDone}>Done</Text></Pressable></View>
-            <View style={s.keyGrid}>
-              {KEYS.map(([label, name]) => (
-                <Pressable key={name} style={s.keyBtn} onPress={() => fire('key', { text: name }, null, { label })}><Text style={s.keyTxt}>{label}</Text></Pressable>
+            <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false}>
+              {KEY_GROUPS.map(([group, ks]) => (
+                <View key={group} style={{ marginBottom: 12 }}>
+                  <Text style={s.keyGroupLabel}>{group}</Text>
+                  <View style={s.keyGrid}>
+                    {ks.map(([label, name]) => (
+                      <Pressable key={name} style={s.keyBtn} onPress={() => fire('key', { text: name }, null, { label })}><Text style={s.keyTxt}>{label}</Text></Pressable>
+                    ))}
+                  </View>
+                </View>
               ))}
-            </View>
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>
@@ -596,6 +635,14 @@ function Field({ s, label, value, onChange, placeholder }) {
     </View>
   );
 }
+function DockBtn({ s, glyph, label, onPress, on }) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [s.dockBtn, on && s.dockBtnOn, pressed && { opacity: 0.6 }]}>
+      <Text style={[s.dockGlyph, on && s.dockOnTxt]}>{glyph}</Text>
+      <Text style={[s.dockLabel, on && s.dockOnTxt]}>{label}</Text>
+    </Pressable>
+  );
+}
 
 const styles = (t) => {
   const st = StyleSheet.create({
@@ -612,7 +659,13 @@ const styles = (t) => {
 
     screenWrap: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
     frame: { width: '100%', height: '100%' },
-    hint: { textAlign: 'center', color: t.label3, fontSize: 11, paddingVertical: 8, paddingHorizontal: 10, backgroundColor: t.bg },
+    dock: { backgroundColor: t.bg, flexGrow: 0 },
+    dockRow: { paddingHorizontal: 10, paddingVertical: 7, gap: 7, alignItems: 'center' },
+    dockBtn: { minWidth: 54, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: t.card, borderWidth: StyleSheet.hairlineWidth, borderColor: t.sep, alignItems: 'center' },
+    dockBtnOn: { backgroundColor: t.blue, borderColor: t.blue },
+    dockGlyph: { color: t.label, fontSize: 16, lineHeight: 20 },
+    dockLabel: { color: t.label3, fontSize: 9, fontWeight: '600', marginTop: 1 },
+    dockOnTxt: { color: '#fff' },
 
     ring: { position: 'absolute', width: 40, height: 40, borderRadius: 20, borderWidth: 3, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.18)' },
     ringSmall: { width: 22, height: 22, borderRadius: 11, borderWidth: 2 },
@@ -663,6 +716,7 @@ const styles = (t) => {
 
     keysBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 20 },
     keysCard: { backgroundColor: t.card, borderRadius: 18, padding: 16, gap: 12 },
+    keyGroupLabel: { color: t.label2, fontSize: 12, fontWeight: '600', marginBottom: 7 },
     keyGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     keyBtn: { backgroundColor: t.fill, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 11 },
     keyTxt: { color: t.label, fontSize: 14, fontWeight: '600' },

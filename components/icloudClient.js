@@ -133,6 +133,7 @@ export function useICloudRemote() {
   const framePersistRef = useRef(0);
   const connectedRef = useRef(false);
   const sendCmdRef = useRef(() => {});
+  const lastKeepRef = useRef(0);   // last time we nudged the bridge, for the freshness watchdog
   const persistFrame = useCallback((fr, force) => {
     lastFrameObjRef.current = fr;
     const now = Date.now();
@@ -275,13 +276,21 @@ export function useICloudRemote() {
     pollFrame();
     sendCmd('shot');
     pollRef.current = setInterval(pollFrame, 550);   // a by-name lookup is one cheap request; poll fast
-    // keepalive: tells the PC bridge a viewer is still here so it keeps polling fast and pushing
-    // frames. Only when we can actually write (native, or signed in on web) — otherwise a failing
-    // write would keep re-opening the Apple sign-in sheet.
+    lastKeepRef.current = Date.now();
+    // Freshness watchdog + keepalive. Runs often and nudges the PC bridge with a 'shot' when the picture
+    // has gone stale (so the age never silently climbs to "100s ago" — if frames stop, we actively ask
+    // for one), and at least every ~16s even when fresh, so the bridge stays in its fast push mode while
+    // you're just watching. Only when we can actually write (native, or signed in on web).
     keepRef.current = setInterval(() => {
       const c = cfgRef.current;
-      if (hasNativeCK || c.webAuthToken) sendCmd('shot');
-    }, 25000);
+      if (!(hasNativeCK || c.webAuthToken)) return;
+      const fr = lastFrameObjRef.current;
+      const age = fr && fr.rxAt ? Date.now() - fr.rxAt : Infinity;   // Infinity before the first live frame
+      if (age > 2500 || Date.now() - lastKeepRef.current > 16000) {
+        lastKeepRef.current = Date.now();
+        sendCmd('shot');
+      }
+    }, 1500);
   }, [pollFrame, sendCmd, pushLog]);
 
   const disconnect = useCallback(() => {
