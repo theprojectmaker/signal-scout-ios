@@ -8,6 +8,7 @@ import { WebView } from 'react-native-webview';
 import Svg, { Path } from 'react-native-svg';
 import { router } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
+import * as Updates from 'expo-updates';
 import { useTheme } from '../../components/theme';
 import { useICloudRemote, newRoom } from '../../components/icloudClient';
 
@@ -499,6 +500,21 @@ export default function ICloudRemoteScreen() {
                 {r.native ? 'Using native iCloud (your device account — no token or sign-in).' : 'Using web iCloud — sending taps needs a one-time Apple sign-in.'}
                 {'\n'}Run icloud-agent.js on your PC with the same room and environment.
               </Text>
+              <View style={{ gap: 6, marginTop: 6 }}>
+                <Text style={s.fieldLabel}>
+                  App version: {Updates.createdAt ? new Date(Updates.createdAt).toLocaleString() : (Updates.isEnabled ? 'embedded' : 'dev')}
+                </Text>
+                <Pressable
+                  style={s.genBtn}
+                  onPress={async () => {
+                    try {
+                      const u = await Updates.checkForUpdateAsync();
+                      if (u.isAvailable) { await Updates.fetchUpdateAsync(); await Updates.reloadAsync(); }
+                      else { r.pushLog && r.pushLog('ok', 'app already up to date'); }
+                    } catch (e) { r.pushLog && r.pushLog('error', 'update check: ' + (e && e.message ? e.message : e)); }
+                  }}
+                ><Text style={s.genTxt}>Check for update now</Text></Pressable>
+              </View>
             </ScrollView>
           </View>
         </KeyboardAvoidingView>
