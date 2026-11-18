@@ -303,7 +303,7 @@ export default function ICloudRemoteScreen() {
 
   const title = r.native ? 'native iCloud' : 'web iCloud';
   const sub = r.frame
-    ? (stale ? `last frame ${frameAgeS}s ago — is the PC bridge running?` : `${r.frame.w}×${r.frame.h} · ${frameAgeS}s ago · ${r.cfg.env}`)
+    ? (stale ? `last frame ${frameAgeS}s ago — is the PC bridge running?` : `${r.frame.w}×${r.frame.h} · ${r.frame.kb || '?'}KB · ${frameAgeS}s ago`)
     : r.connected ? (errish ? r.status : 'waiting for your PC…') : 'not connected';
 
   return (

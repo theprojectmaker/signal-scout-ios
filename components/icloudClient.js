@@ -162,7 +162,7 @@ export function useICloudRemote() {
           // ack = 0  → older bridge: it can't confirm, so the screen says "sent" rather than guess.
           // rxAt = when THIS phone received the frame. Age is measured from this, never from the
           // PC's clock (fr.ts), so clock skew can't make a fresh frame read as "1500s ago".
-          setFrame({ ...fr, ack: fr.seq < 0 ? -fr.seq : 0, rxAt: Date.now() });
+          setFrame({ ...fr, ack: fr.seq < 0 ? -fr.seq : 0, rxAt: Date.now(), kb: Math.round((fr.jpeg.length * 0.75) / 1024) });
           if (!liveRef.current) { liveRef.current = true; pushLog('ok', `screen is live (${fr.w}×${fr.h}, ${hasNativeCK ? 'native' : 'web'})`); }
         }
         setStatus('connected');
@@ -177,9 +177,9 @@ export function useICloudRemote() {
   const lastBurstRef = useRef(0);
   const burstFrames = useCallback(() => {
     const now = Date.now();
-    if (now - lastBurstRef.current < 1200) return;
+    if (now - lastBurstRef.current < 700) return;
     lastBurstRef.current = now;
-    [500, 1400, 2600].forEach((ms) => setTimeout(() => pollFrameRef.current(), ms));
+    [250, 700, 1300].forEach((ms) => setTimeout(() => pollFrameRef.current(), ms));
   }, []);
 
   // web path only: one-time Apple sign-in so the user can write (native doesn't need this).
@@ -237,7 +237,7 @@ export function useICloudRemote() {
     pushLog('info', `connecting · ${hasNativeCK ? 'native' : 'web'} · env ${c.env} · room ${c.room}`);
     pollFrame();
     sendCmd('shot');
-    pollRef.current = setInterval(pollFrame, 1000);   // a by-name lookup is one cheap request
+    pollRef.current = setInterval(pollFrame, 550);   // a by-name lookup is one cheap request; poll fast
     // keepalive: tells the PC bridge a viewer is still here so it keeps polling fast and pushing
     // frames. Only when we can actually write (native, or signed in on web) — otherwise a failing
     // write would keep re-opening the Apple sign-in sheet.
