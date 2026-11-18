@@ -1,10 +1,11 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
 import {
   View, Text, Pressable, TextInput, ScrollView, StyleSheet, Image, PanResponder, Modal,
-  KeyboardAvoidingView, Platform, ActivityIndicator,
+  KeyboardAvoidingView, Platform, ActivityIndicator, useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
+import Svg, { Path } from 'react-native-svg';
 import { useTheme } from '../../components/theme';
 import { useICloudRemote, newRoom } from '../../components/icloudClient';
 
@@ -25,10 +26,16 @@ const KEYS = [
   ['Alt+Tab', 'ALTTAB'], ['Task Mgr', 'TASKMGR'],
 ];
 
+const NAMES = { click: 'Click', rightclick: 'Right-click', move: 'Move', up: 'Drag', wheel: 'Scroll', type: 'Typing', key: 'Key', shot: 'Refresh', quality: 'Quality' };
+const MARK_COLOR = { sending: '#0A84FF', sent: '#FF9F0A', unconfirmed: '#FF9F0A', done: '#30D158', failed: '#FF453B', timeout: '#FF453B' };
+const shortErr = (s) => String(s || '').replace(/^CloudKit \d+:\s*/, '').slice(0, 70);
+const MAX_ZOOM = 6;
+
 export default function ICloudRemoteScreen() {
   const t = useTheme();
   const s = styles(t);
   const insets = useSafeAreaInsets();
+  const { height: winH } = useWindowDimensions();
   const r = useICloudRemote();
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -36,80 +43,258 @@ export default function ICloudRemoteScreen() {
   const [keysOpen, setKeysOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [typed, setTyped] = useState('');
-  const [gesture, setGesture] = useState('');
+  const [dragMode, setDragMode] = useState(false);
+  const [sharp, setSharp] = useState(false);
 
-  // refs so the (once-created) PanResponder always sees the latest frame + senders
+  // ---------- zoom / pan ----------
   const box = useRef({ w: 1, h: 1 });
+  const [zoom, setZoom] = useState(1);
+  const [off, setOff] = useState({ x: 0, y: 0 });
+  const zoomRef = useRef(1);
+  const offRef = useRef({ x: 0, y: 0 });
+  const applyZP = useCallback((z, x, y) => {
+    const bw = box.current.w, bh = box.current.h;
+    const zz = Math.max(1, Math.min(MAX_ZOOM, z));
+    const mx = ((zz - 1) * bw) / 2, my = ((zz - 1) * bh) / 2;   // keep the picture from leaving the view
+    const cx = Math.max(-mx, Math.min(mx, x)), cy = Math.max(-my, Math.min(my, y));
+    zoomRef.current = zz; offRef.current = { x: cx, y: cy };
+    setZoom(zz); setOff({ x: cx, y: cy });
+  }, []);
+  const zoomBy = useCallback((k) => {
+    const z0 = zoomRef.current, z1 = Math.max(1, Math.min(MAX_ZOOM, z0 * k));
+    const f = z1 / z0;
+    applyZP(z1, offRef.current.x * f, offRef.current.y * f);   // zoom about the centre
+  }, [applyZP]);
+
+  // ---------- live refs for the (once-created) PanResponder ----------
   const frameRef = useRef(null);
   const sendRef = useRef(r.sendCmd);
+  const dragModeRef = useRef(false);
   useEffect(() => { frameRef.current = r.frame; }, [r.frame]);
   useEffect(() => { sendRef.current = r.sendCmd; }, [r.sendCmd]);
+  useEffect(() => { dragModeRef.current = dragMode; }, [dragMode]);
 
+  // box point → PC pixel, undoing zoom/pan then the letterbox
   const mapPt = useCallback((lx, ly) => {
     const f = frameRef.current;
     if (!f || !f.w || !f.h) return null;
     const bw = box.current.w, bh = box.current.h;
+    const z = zoomRef.current, o = offRef.current;
+    const cx = bw / 2, cy = bh / 2;
+    const ix = cx + (lx - cx - o.x) / z, iy = cy + (ly - cy - o.y) / z;
     const scale = Math.min(bw / f.w, bh / f.h);
     const dw = f.w * scale, dh = f.h * scale;
     const ox = (bw - dw) / 2, oy = (bh - dh) / 2;
-    const x = Math.round((lx - ox) / scale), y = Math.round((ly - oy) / scale);
+    const x = Math.round((ix - ox) / scale), y = Math.round((iy - oy) / scale);
     return { x: Math.max(0, Math.min(f.w, x)), y: Math.max(0, Math.min(f.h, y)) };
   }, []);
 
-  const flash = useCallback((label) => { setGesture(label); setTimeout(() => setGesture(''), 900); }, []);
+  // ---------- "did it go through?" feedback ----------
+  // Each action becomes a ticket: sending (writing to iCloud) → sent (in iCloud, PC hasn't run it)
+  // → done (the PC's receipt says it ran it) | failed | timeout | unconfirmed (old bridge).
+  const [marks, setMarks] = useState([]);
+  const marksRef = useRef([]);
+  const markId = useRef(0);
+  const inflight = useRef(0);
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(null);
+  // where the PC's mouse is headed, in PC pixels. It follows the finger INSTANTLY (no iCloud delay),
+  // so you always see where the mouse will go; the real one catches up about a second later.
+  const [cursor, setCursor] = useState(null);
+
+  const commit = useCallback(() => setMarks(marksRef.current.slice()), []);
+  const showToast = useCallback((text, tone) => {
+    setToast({ text, tone });
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 3600);
+  }, []);
+  const patchMark = useCallback((id, patch) => {
+    marksRef.current = marksRef.current.map((m) => (m.id === id ? { ...m, ...patch } : m));
+    commit();
+  }, [commit]);
+
+  // fire(kind, extra, at, opts): send a command with feedback. `at` = {x,y} in box coords for the ring.
+  const fire = useCallback((kind, extra, at, opts = {}) => {
+    const id = ++markId.current;
+    const name = opts.label || NAMES[kind] || kind;
+    marksRef.current = [...marksRef.current.slice(-9), {
+      id, kind, name, x: at ? at.x : null, y: at ? at.y : null,
+      state: 'sending', t0: Date.now(), seq: 0, quiet: !!opts.quiet,
+    }];
+    commit();
+    inflight.current++;
+    Promise.resolve(sendRef.current(kind, extra)).then((res) => {
+      inflight.current = Math.max(0, inflight.current - 1);
+      if (res && res.ok) {
+        patchMark(id, { state: 'sent', seq: res.seq, tSent: Date.now() });
+        if (!opts.quiet) showToast(`${name} sent — waiting for the PC…`, 'wait');
+      } else {
+        patchMark(id, { state: 'failed', tDone: Date.now() });
+        showToast(`✗ ${name} NOT sent${res && res.error ? ': ' + shortErr(res.error) : ''}`, 'bad');
+      }
+    }).catch(() => { inflight.current = Math.max(0, inflight.current - 1); });
+  }, [commit, patchMark, showToast]);
+
+  // fire-and-forget send with no ticket (cursor streaming); still counted for back-pressure
+  const rawSend = useCallback((kind, extra) => {
+    inflight.current++;
+    Promise.resolve(sendRef.current(kind, extra)).finally(() => { inflight.current = Math.max(0, inflight.current - 1); });
+  }, []);
+
+  // settle tickets against the PC's receipts, time out the silent ones, clear the faded ones
+  const settle = useCallback(() => {
+    const f = frameRef.current;
+    const ack = f && f.ack > 0 ? f.ack : 0;
+    const now = Date.now();
+    let changed = false;
+    const next = marksRef.current.map((m) => {
+      if (m.state === 'sending' && now - m.t0 > 20000) {
+        changed = true; showToast(`✗ ${m.name} timed out before reaching iCloud`, 'bad');
+        return { ...m, state: 'failed', tDone: now };
+      }
+      if (m.state === 'sent') {
+        if (ack && m.seq && ack >= m.seq) {
+          changed = true;
+          if (!m.quiet) showToast(`✓ ${m.name} done on the PC · ${((now - m.t0) / 1000).toFixed(1)}s`, 'ok');
+          return { ...m, state: 'done', tDone: now };
+        }
+        const age = now - (m.tSent || m.t0);
+        if (ack && age > 15000) {
+          changed = true; showToast(`✗ ${m.name}: no reply from the PC — is the bridge running?`, 'bad');
+          return { ...m, state: 'timeout', tDone: now };
+        }
+        if (!ack && age > 3500) {
+          changed = true; if (!m.quiet) showToast(`${m.name} sent — this bridge can’t confirm (update it)`, 'wait');
+          return { ...m, state: 'unconfirmed', tDone: now };
+        }
+      }
+      return m;
+    }).filter((m) => !m.tDone || now - m.tDone < (m.state === 'done' ? 1300 : 2600));
+    if (changed || next.length !== marksRef.current.length) { marksRef.current = next; commit(); }
+    else marksRef.current = next;
+  }, [commit, showToast]);
+
+  useEffect(() => { settle(); }, [r.frame, settle]);          // a new frame may carry a receipt
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!r.connected) return undefined;
+    const id = setInterval(() => { setTick((n) => n + 1); settle(); }, 500);
+    return () => clearInterval(id);
+  }, [r.connected, settle]);
+
+  // ---------- touch: finger follows mouse · tap clicks · hold right-clicks · pinch zooms ----------
+  const g = useRef({}).current;
+  const dist = (a, b) => Math.hypot(a.locationX - b.locationX, a.locationY - b.locationY) || 1;
+  const startPinch = (ts) => {
+    clearTimeout(g.longTimer);
+    if (g.tracking && dragModeRef.current) rawSend('up', {});   // never leave the button held
+    g.tracking = false; g.multi = true;
+    const a = ts[0], b = ts[1];
+    const mx = (a.locationX + b.locationX) / 2, my = (a.locationY + b.locationY) / 2;
+    const cx = box.current.w / 2, cy = box.current.h / 2;
+    const z0 = zoomRef.current, o = offRef.current;
+    g.pinch = { d0: dist(a, b), z0, ax: cx + (mx - cx - o.x) / z0, ay: cy + (my - cy - o.y) / z0 };
+  };
+  const updatePinch = (ts) => {
+    const a = ts[0], b = ts[1], p = g.pinch;
+    const mx = (a.locationX + b.locationX) / 2, my = (a.locationY + b.locationY) / 2;
+    const cx = box.current.w / 2, cy = box.current.h / 2;
+    const z = Math.max(1, Math.min(MAX_ZOOM, (p.z0 * dist(a, b)) / p.d0));
+    // keep the picture point under the fingers' midpoint fixed while zooming/panning
+    applyZP(z, mx - cx - z * (p.ax - cx), my - cy - z * (p.ay - cy));
+  };
 
   const pan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
+      onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: (e) => {
-        const { locationX, locationY } = e.nativeEvent;
-        pan.state = { start: mapPt(locationX, locationY), moved: false, dragging: false, longFired: false };
-        pan.longTimer = setTimeout(() => {
-          const st = pan.state;
-          if (st && !st.moved && st.start) { st.longFired = true; sendRef.current('rightclick', st.start); flash('right-click'); }
+        const ts = e.nativeEvent.touches;
+        g.moved = false; g.tracking = false; g.longFired = false; g.pinch = null; g.multi = false; g.last = null;
+        if (ts && ts.length >= 2) { startPinch(ts); return; }
+        const { locationX: lx, locationY: ly } = e.nativeEvent;
+        g.start = { lx, ly };
+        g.longTimer = setTimeout(() => {
+          if (g.moved || g.multi) return;
+          const p = mapPt(lx, ly);
+          if (p) { g.longFired = true; setCursor(p); fire('rightclick', p, { x: lx, y: ly }); }
         }, 450);
       },
-      onPanResponderMove: (e, g) => {
-        const st = pan.state; if (!st) return;
-        if (!st.dragging && (Math.abs(g.dx) > 8 || Math.abs(g.dy) > 8)) {
-          st.moved = true; st.dragging = true;
-          clearTimeout(pan.longTimer);
-          if (st.start) { sendRef.current('move', st.start); sendRef.current('down'); flash('drag'); }
+      onPanResponderMove: (e, gs) => {
+        const ts = e.nativeEvent.touches;
+        if (ts && ts.length >= 2) { if (!g.pinch) startPinch(ts); else updatePinch(ts); return; }
+        if (g.multi) return;                       // a pinch just ended — wait for a fresh touch
+        const { locationX: lx, locationY: ly } = e.nativeEvent;
+        if (!g.tracking) {
+          if (Math.abs(gs.dx) < 8 && Math.abs(gs.dy) < 8) return;
+          g.moved = true; g.tracking = true; clearTimeout(g.longTimer);
+          if (dragModeRef.current) {               // drag mode: grab at the start point, then carry it
+            const p0 = mapPt(g.start.lx, g.start.ly);
+            if (p0) { rawSend('move', p0); rawSend('down', {}); }
+          }
         }
+        const p = mapPt(lx, ly);
+        if (!p) return;
+        setCursor(p);                              // the on-screen pointer follows the finger with zero lag
+        // the real mouse follows too — throttled, because every move is an iCloud write
+        const now = Date.now(), L = g.last;
+        if (L && (now - L.t < 300 || Math.hypot(lx - L.lx, ly - L.ly) < 4)) return;
+        if (inflight.current > 4) return;          // back-pressure: don't pile up behind a slow link
+        g.last = { t: now, lx, ly };
+        rawSend('move', p);
       },
       onPanResponderRelease: (e) => {
-        const st = pan.state; if (!st) return;
-        clearTimeout(pan.longTimer);
-        const end = mapPt(e.nativeEvent.locationX, e.nativeEvent.locationY) || st.start;
-        if (st.dragging) { if (end) sendRef.current('move', end); sendRef.current('up'); }
-        else if (st.longFired) { /* right-click already sent */ }
-        else if (st.start) { sendRef.current('click', st.start); flash('click'); }
-        pan.state = null;
+        clearTimeout(g.longTimer);
+        const { locationX: lx, locationY: ly } = e.nativeEvent;
+        if (g.multi) { g.pinch = null; g.multi = false; return; }
+        if (g.tracking) {
+          const p = mapPt(lx, ly);
+          if (dragModeRef.current) {
+            if (p) rawSend('move', { ...p });
+            fire('up', {}, { x: lx, y: ly }, { label: 'Drag' });
+          } else if (p) {
+            fire('move', { ...p, final: true }, { x: lx, y: ly }, { label: 'Move', quiet: true });
+          }
+          if (p) setCursor(p);
+          g.tracking = false;
+          return;
+        }
+        if (g.longFired) return;                   // right-click already sent
+        const p = mapPt(g.start.lx, g.start.ly);
+        if (p) { setCursor(p); fire('click', p, { x: g.start.lx, y: g.start.ly }); }
       },
-      onPanResponderTerminate: () => { clearTimeout(pan.longTimer); pan.state = null; },
+      onPanResponderTerminate: () => {
+        clearTimeout(g.longTimer);
+        if (g.tracking && dragModeRef.current) rawSend('up', {});
+        g.tracking = false; g.multi = false; g.pinch = null;
+      },
     })
   ).current;
 
-  // re-render once a second while connected so the "Ns ago" counter keeps moving
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (!r.connected) return undefined;
-    const id = setInterval(() => setTick((n) => n + 1), 1000);
-    return () => clearInterval(id);
-  }, [r.connected]);
+  // PC pixel → position on screen (through the letterbox, then the current zoom/pan)
+  const curScreen = (() => {
+    const f = r.frame;
+    if (!cursor || !f || !f.w || !f.h) return null;
+    const bw = box.current.w, bh = box.current.h;
+    const scale = Math.min(bw / f.w, bh / f.h);
+    const ix = (bw - f.w * scale) / 2 + cursor.x * scale;
+    const iy = (bh - f.h * scale) / 2 + cursor.y * scale;
+    const cx = bw / 2, cy = bh / 2;
+    return { x: cx + off.x + zoom * (ix - cx), y: cy + off.y + zoom * (iy - cy) };
+  })();
 
   const needsSetup = !r.cfg.container || !r.cfg.room || (!r.native && !r.cfg.token);
   const errish = /error|fail|401|403|AUTHENTICATION|unauthenticated|CloudKit \d/i.test(r.status || '');
   const frameAgeS = r.frame ? Math.max(0, Math.round((Date.now() - r.frame.ts) / 1000)) : null;
-  const stale = frameAgeS != null && frameAgeS > 40;   // PC has gone quiet (bridge stopped / PC asleep)
+  const stale = frameAgeS != null && frameAgeS > 40;
   const live = r.connected && !!r.frame && !errish && !stale;
   const dotColor = errish ? t.red : live ? t.green : r.connected ? '#FF9F0A' : t.label3;
 
   const doMenu = (fn) => () => { setMenuOpen(false); setTimeout(fn, 60); };
   const sendType = (enter) => {
-    if (typed) r.sendCmd('type', { text: typed });
-    if (enter) r.sendCmd('key', { text: 'ENTER' });
+    if (typed) fire('type', { text: typed }, null, { label: 'Typing' });
+    if (enter) fire('key', { text: 'ENTER' }, null, { label: 'Enter' });
     setTyped('');
   };
 
@@ -120,7 +305,6 @@ export default function ICloudRemoteScreen() {
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      {/* slim top bar — same shape as the Remote tab */}
       <View style={s.topBar}>
         <View style={s.dotRow}>
           <View style={[s.dot, { backgroundColor: dotColor }]} />
@@ -131,23 +315,26 @@ export default function ICloudRemoteScreen() {
         </Pressable>
       </View>
 
-      {/* full-bleed letterboxed screen */}
       <View
         style={s.screenWrap}
         onLayout={(e) => { box.current = { w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height }; }}
         {...pan.panHandlers}
       >
         {r.frame ? (
-          <Image source={{ uri: `data:image/jpeg;base64,${r.frame.jpeg}` }} style={s.frame} resizeMode="contain" fadeDuration={0} />
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
+            <Image
+              source={{ uri: `data:image/jpeg;base64,${r.frame.jpeg}` }}
+              style={[s.frame, { transform: [{ translateX: off.x }, { translateY: off.y }, { scale: zoom }] }]}
+              resizeMode="contain" fadeDuration={0}
+            />
+          </View>
         ) : !r.connected ? (
           <View style={s.center}>
             <Text style={s.emptyTitle}>iCloud Remote</Text>
             <Text style={s.emptyHint}>Control your PC over iCloud — works on locked-down Wi-Fi.</Text>
-            <Pressable
-              style={[s.bigBtn, needsSetup && { opacity: 0.4 }]}
-              disabled={needsSetup}
-              onPress={r.connect}
-            ><Text style={s.bigBtnTxt}>Connect</Text></Pressable>
+            <Pressable style={[s.bigBtn, needsSetup && { opacity: 0.4 }]} disabled={needsSetup} onPress={r.connect}>
+              <Text style={s.bigBtnTxt}>Connect</Text>
+            </Pressable>
             {needsSetup ? <Text style={s.emptyMeta}>Open ••• → Settings to finish setup</Text> : null}
           </View>
         ) : (
@@ -165,25 +352,61 @@ export default function ICloudRemoteScreen() {
             <Text style={s.emptyMeta}>{r.native ? 'native' : 'web'} · env {r.cfg.env} · room {r.cfg.room || '—'}</Text>
           </View>
         )}
-        {!!gesture && <View style={s.badge}><Text style={s.badgeTxt}>{gesture}</Text></View>}
+
+        {/* rings where you touched: blue sending → amber waiting for the PC → green done / red failed */}
+        {marks.filter((m) => m.x != null).map((m) => (
+          <View
+            key={m.id} pointerEvents="none"
+            style={[s.ring, m.kind === 'move' && s.ringSmall, { left: m.x - (m.kind === 'move' ? 11 : 20), top: m.y - (m.kind === 'move' ? 11 : 20), borderColor: MARK_COLOR[m.state] }]}
+          >
+            <Text style={[s.ringTxt, { color: MARK_COLOR[m.state] }]}>
+              {m.state === 'done' ? '✓' : (m.state === 'failed' || m.state === 'timeout') ? '✕' : ''}
+            </Text>
+          </View>
+        ))}
+        {curScreen ? (
+          <View pointerEvents="none" style={{ position: 'absolute', left: curScreen.x, top: curScreen.y }}>
+            <Svg width={22} height={28} viewBox="0 0 22 28">
+              <Path d="M1.5 1.5 L1.5 21 L6.2 16.6 L9.6 24.6 L13 23.1 L9.6 15.2 L16.2 15.2 Z" fill="#ffffff" stroke="#0A84FF" strokeWidth={2} strokeLinejoin="round" />
+            </Svg>
+          </View>
+        ) : null}
+
+        {dragMode ? <View style={s.modeBadge} pointerEvents="none"><Text style={s.modeBadgeTxt}>DRAG MODE</Text></View> : null}
+        {zoom > 1.01 ? (
+          <Pressable style={s.resetZoom} onPress={() => applyZP(1, 0, 0)}><Text style={s.resetZoomTxt}>{Math.round(zoom * 100)}%  ✕</Text></Pressable>
+        ) : null}
+        {toast ? (
+          <View style={[s.toast, toast.tone === 'ok' && s.toastOk, toast.tone === 'bad' && s.toastBad]} pointerEvents="none">
+            <Text style={s.toastTxt} numberOfLines={2}>{toast.text}</Text>
+          </View>
+        ) : null}
       </View>
 
-      <Text style={s.hint}>Tap = click · drag = move · hold = right-click</Text>
+      <Text style={s.hint}>Move finger = move mouse · tap = click · hold = right-click · pinch = zoom · 2 fingers = pan</Text>
 
       {/* ============ dropdown menu ============ */}
       <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
         <Pressable style={s.menuBackdrop} onPress={() => setMenuOpen(false)}>
-          <View style={[s.menuCard, { top: insets.top + 44 }]}>
-            <MenuItem s={s} label="Refresh" onPress={doMenu(r.requestShot)} />
-            <MenuItem s={s} label="Type text…" onPress={doMenu(() => setKbOpen(true))} />
-            <MenuItem s={s} label="Keys…" onPress={doMenu(() => setKeysOpen(true))} />
-            <MenuItem s={s} label="Scroll up" onPress={doMenu(() => r.sendCmd('wheel', { dy: -240 }))} />
-            <MenuItem s={s} label="Scroll down" onPress={doMenu(() => r.sendCmd('wheel', { dy: 240 }))} />
-            {r.connected && !r.signedIn ? <MenuItem s={s} label="Sign in to control" onPress={doMenu(r.beginSignIn)} /> : null}
-            <MenuItem s={s} label="Settings" onPress={doMenu(() => setSetupOpen(true))} />
-            {r.connected
-              ? <MenuItem s={s} label="Disconnect" danger last onPress={doMenu(r.disconnect)} />
-              : <MenuItem s={s} label="Connect" accent last disabled={needsSetup} onPress={doMenu(r.connect)} />}
+          <View style={[s.menuCard, { top: insets.top + 44, maxHeight: winH - insets.top - 110 }]}>
+            <ScrollView bounces={false}>
+              <MenuItem s={s} label="Refresh" onPress={doMenu(() => fire('shot', {}, null, { label: 'Refresh' }))} />
+              <MenuItem s={s} label="Type text…" onPress={doMenu(() => setKbOpen(true))} />
+              <MenuItem s={s} label="Keys…" onPress={doMenu(() => setKeysOpen(true))} />
+              <MenuItem s={s} label="Scroll up" onPress={doMenu(() => fire('wheel', { dy: -240 }, null, { label: 'Scroll' }))} />
+              <MenuItem s={s} label="Scroll down" onPress={doMenu(() => fire('wheel', { dy: 240 }, null, { label: 'Scroll' }))} />
+              <MenuItem s={s} label={`Drag mode: ${dragMode ? 'ON' : 'off'}`} accent={dragMode} onPress={doMenu(() => setDragMode((v) => !v))} />
+              <MenuItem s={s} label="Zoom in" onPress={doMenu(() => zoomBy(1.6))} />
+              <MenuItem s={s} label="Zoom out" onPress={doMenu(() => zoomBy(1 / 1.6))} />
+              {zoom > 1.01 ? <MenuItem s={s} label="Reset zoom" onPress={doMenu(() => applyZP(1, 0, 0))} /> : null}
+              <MenuItem s={s} label={`Sharp picture: ${sharp ? 'ON' : 'off'}`} accent={sharp}
+                onPress={doMenu(() => { const n = !sharp; setSharp(n); fire('quality', { text: n ? 'sharp' : 'saver' }, null, { label: n ? 'Sharp picture' : 'Saver picture' }); })} />
+              {r.connected && !r.signedIn ? <MenuItem s={s} label="Sign in to control" onPress={doMenu(r.beginSignIn)} /> : null}
+              <MenuItem s={s} label="Settings" onPress={doMenu(() => setSetupOpen(true))} />
+              {r.connected
+                ? <MenuItem s={s} label="Disconnect" danger last onPress={doMenu(r.disconnect)} />
+                : <MenuItem s={s} label="Connect" accent last disabled={needsSetup} onPress={doMenu(r.connect)} />}
+            </ScrollView>
           </View>
         </Pressable>
       </Modal>
@@ -195,7 +418,7 @@ export default function ICloudRemoteScreen() {
             <View style={s.sheetHead}><Text style={s.sheetTitle}>Type to PC</Text><Pressable onPress={() => setKbOpen(false)} hitSlop={8}><Text style={s.sheetDone}>Done</Text></Pressable></View>
             <TextInput style={s.kbInput} value={typed} onChangeText={setTyped} placeholder="Type here, then Send" placeholderTextColor={t.label3} autoFocus multiline autoCapitalize="none" autoCorrect={false} />
             <View style={s.kbBtns}>
-              <Pressable style={[s.kbBtn, s.kbGhost]} onPress={() => r.sendCmd('key', { text: 'BACKSPACE' })}><Text style={s.kbGhostTxt}>Backspace</Text></Pressable>
+              <Pressable style={[s.kbBtn, s.kbGhost]} onPress={() => fire('key', { text: 'BACKSPACE' }, null, { label: 'Backspace' })}><Text style={s.kbGhostTxt}>Backspace</Text></Pressable>
               <Pressable style={[s.kbBtn, s.kbGhost]} onPress={() => sendType(false)}><Text style={s.kbGhostTxt}>Send</Text></Pressable>
               <Pressable style={[s.kbBtn, s.kbBlue]} onPress={() => sendType(true)}><Text style={s.kbBlueTxt}>Send + Enter</Text></Pressable>
             </View>
@@ -210,7 +433,7 @@ export default function ICloudRemoteScreen() {
             <View style={s.sheetHead}><Text style={s.sheetTitle}>Keys</Text><Pressable onPress={() => setKeysOpen(false)} hitSlop={8}><Text style={s.sheetDone}>Done</Text></Pressable></View>
             <View style={s.keyGrid}>
               {KEYS.map(([label, name]) => (
-                <Pressable key={name} style={s.keyBtn} onPress={() => r.sendCmd('key', { text: name })}><Text style={s.keyTxt}>{label}</Text></Pressable>
+                <Pressable key={name} style={s.keyBtn} onPress={() => fire('key', { text: name }, null, { label })}><Text style={s.keyTxt}>{label}</Text></Pressable>
               ))}
             </View>
           </Pressable>
@@ -301,9 +524,20 @@ const styles = (t) => {
 
     screenWrap: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
     frame: { width: '100%', height: '100%' },
-    badge: { position: 'absolute', top: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: 999, paddingHorizontal: 11, paddingVertical: 5 },
-    badgeTxt: { color: '#fff', fontSize: 11, fontWeight: '700' },
-    hint: { textAlign: 'center', color: t.label3, fontSize: 11, paddingVertical: 8, backgroundColor: t.bg },
+    hint: { textAlign: 'center', color: t.label3, fontSize: 11, paddingVertical: 8, paddingHorizontal: 10, backgroundColor: t.bg },
+
+    ring: { position: 'absolute', width: 40, height: 40, borderRadius: 20, borderWidth: 3, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.18)' },
+    ringSmall: { width: 22, height: 22, borderRadius: 11, borderWidth: 2 },
+    ringTxt: { fontSize: 18, fontWeight: '900', marginTop: -1 },
+    ghost: { position: 'absolute', width: 14, height: 14, borderRadius: 7, backgroundColor: '#0A84FF', borderWidth: 2, borderColor: '#fff' },
+    modeBadge: { position: 'absolute', top: 10, left: 10, backgroundColor: '#0A84FF', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4 },
+    modeBadgeTxt: { color: '#fff', fontSize: 10, fontWeight: '800', letterSpacing: 0.5 },
+    resetZoom: { position: 'absolute', right: 12, bottom: 12, backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
+    resetZoomTxt: { color: '#fff', fontSize: 12, fontWeight: '700' },
+    toast: { position: 'absolute', left: 14, right: 14, bottom: 14, alignSelf: 'center', backgroundColor: 'rgba(40,40,44,0.92)', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
+    toastOk: { backgroundColor: 'rgba(28,120,56,0.94)' },
+    toastBad: { backgroundColor: 'rgba(170,40,32,0.95)' },
+    toastTxt: { color: '#fff', fontSize: 13, fontWeight: '600', textAlign: 'center' },
 
     emptyTitle: { color: '#e6e6e6', fontSize: 17, fontWeight: '700', marginTop: 6, textAlign: 'center' },
     emptyHint: { color: '#8a8a8a', fontSize: 12, textAlign: 'center', lineHeight: 17, maxWidth: 280 },
@@ -314,7 +548,7 @@ const styles = (t) => {
     bigBtnTxt: { color: '#fff', fontSize: 16, fontWeight: '700' },
 
     menuBackdrop: { flex: 1 },
-    menuCard: { position: 'absolute', right: 12, minWidth: 190, backgroundColor: t.card, borderRadius: 14, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: t.sep, shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 12 },
+    menuCard: { position: 'absolute', right: 12, minWidth: 210, backgroundColor: t.card, borderRadius: 14, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth, borderColor: t.sep, shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 12 },
     menuItem: { paddingVertical: 13, paddingHorizontal: 18 },
     menuSep: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.sep },
     menuTxt: { color: t.label, fontSize: 16 },

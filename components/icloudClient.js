@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import { hasNativeCK, nativeSave, nativeQuery } from './icloudNative';
+import { hasNativeCK, nativePut, nativeGet } from './icloudNative';
 
 const RC = (Constants.expoConfig && Constants.expoConfig.extra && Constants.expoConfig.extra.rc) || {};
 const CFG_KEY = 'icloud_remote_cfg_v1';
@@ -46,29 +46,36 @@ async function ckPost(cfg, op, body, timeoutMs = 12000) {
 }
 
 // ---- backend (native preferred, web fallback) -------------------------------
+// MAILBOX: nothing is queried or deleted. Measured on live CloudKit, a QUERY only sees a new record
+// after ~21s (index lag) while a LOOKUP BY NAME sees it in <1s. So:
+//   frame    = ONE record  frame-<ROOM>, overwritten in place by the PC → we just look it up
+//   commands = a ring of 16 records cmd-<ROOM>-0..15; we overwrite slot (seq % 16) → the PC looks them all up
+// The PC runs a command only if its seq is newer than the last it ran, so a command can never replay.
+const SLOTS = 16;
+const slotName = (room, seq) => `cmd-${room}-${seq % SLOTS}`;
+const frameName = (room) => `frame-${room}`;
+
 async function backendLatestFrame(cfg) {
   if (hasNativeCK) {
-    const recs = await nativeQuery('RCFrame', cfg.room, 1);
+    const recs = await nativeGet([frameName(cfg.room)]);
     const r = recs && recs[0];
     if (!r || !r.jpeg) return null;
-    return { jpeg: r.jpeg, w: Number(r.w) || 0, h: Number(r.h) || 0, ts: Number(r.ts) || Date.now() };
+    return { jpeg: r.jpeg, w: Number(r.w) || 0, h: Number(r.h) || 0, ts: Number(r.ts) || Date.now(), seq: Number(r.seq) || 0 };
   }
-  const resp = await ckPost(cfg, 'query', {
-    query: {
-      recordType: 'RCFrame',
-      filterBy: [{ fieldName: 'room', comparator: 'EQUALS', fieldValue: { value: cfg.room } }],
-      sortBy: [{ fieldName: 'ts', ascending: false }],
-    }, resultsLimit: 1,
-  });
+  const resp = await ckPost(cfg, 'lookup', { records: [{ recordName: frameName(cfg.room) }] });
   const rec = resp.records && resp.records[0];
-  if (!rec || !rec.fields || !rec.fields.jpeg) return null;
+  if (!rec || !rec.fields || !rec.fields.jpeg) return null;       // NOT_FOUND → the PC hasn't published yet
   const f = rec.fields;
-  return { jpeg: f.jpeg.value, w: f.w ? Number(f.w.value) : 0, h: f.h ? Number(f.h.value) : 0, ts: f.ts ? Number(f.ts.value) : Date.now() };
+  return { jpeg: f.jpeg.value, w: f.w ? Number(f.w.value) : 0, h: f.h ? Number(f.h.value) : 0, ts: f.ts ? Number(f.ts.value) : Date.now(), seq: f.seq ? Number(f.seq.value) : 0 };
 }
 async function backendWriteCmd(cfg, plain) {
-  if (hasNativeCK) return nativeSave('RCCmd', plain);
+  const name = slotName(cfg.room, plain.seq);
+  if (hasNativeCK) return nativePut('RCCmd', name, plain);
   const f = {}; for (const k in plain) f[k] = { value: plain[k] };
-  return ckPost(cfg, 'modify', { operations: [{ operationType: 'create', record: { recordType: 'RCCmd', fields: f } }] });
+  const resp = await ckPost(cfg, 'modify', { operations: [{ operationType: 'forceReplace', record: { recordType: 'RCCmd', recordName: name, fields: f } }] });
+  const bad = resp.records && resp.records[0] && resp.records[0].serverErrorCode;   // per-record errors arrive inside a 200
+  if (bad) throw new Error(`CloudKit ${bad}: ${((resp.records[0].reason) || '').slice(0, 80)}`);
+  return resp;
 }
 
 export function newRoom() {
@@ -119,7 +126,13 @@ export function useICloudRemote() {
     try {
       const fr = await backendLatestFrame(cfg);
       if (fr && fr.jpeg) {
-        if (fr.ts !== lastTsRef.current) { lastTsRef.current = fr.ts; setFrame(fr); }
+        if (fr.ts !== lastTsRef.current) {
+          lastTsRef.current = fr.ts;
+          // The PC bridge writes seq = -(newest command it has executed) as a delivery receipt.
+          // ack > 0  → this bridge reports receipts (every command with seq <= ack has run).
+          // ack = 0  → older bridge: it can't confirm, so the screen says "sent" rather than guess.
+          setFrame({ ...fr, ack: fr.seq < 0 ? -fr.seq : 0 });
+        }
         setStatus('connected');
       } else { setStatus('waiting for your PC…'); }
     } catch (e) { setStatus(String(e.message || e)); }
@@ -127,8 +140,14 @@ export function useICloudRemote() {
 
   useEffect(() => { pollFrameRef.current = pollFrame; }, [pollFrame]);
 
+  // After an action, re-check for the new screenshot sooner than the steady poll. Rate-limited so a
+  // stream of cursor moves can't turn into a flood of CloudKit queries.
+  const lastBurstRef = useRef(0);
   const burstFrames = useCallback(() => {
-    [400, 1000, 1800, 2800].forEach((ms) => setTimeout(() => pollFrameRef.current(), ms));
+    const now = Date.now();
+    if (now - lastBurstRef.current < 1200) return;
+    lastBurstRef.current = now;
+    [500, 1400, 2600].forEach((ms) => setTimeout(() => pollFrameRef.current(), ms));
   }, []);
 
   // web path only: one-time Apple sign-in so the user can write (native doesn't need this).
@@ -153,7 +172,10 @@ export function useICloudRemote() {
 
   const sendCmd = useCallback(async (kind, extra = {}) => {
     const cfg = cfgRef.current;
-    if (!cfg.container || !cfg.room || (!hasNativeCK && !cfg.token)) { setStatus('Set up iCloud first'); return; }
+    if (!cfg.container || !cfg.room || (!hasNativeCK && !cfg.token)) {
+      setStatus('Set up iCloud first');
+      return { ok: false, seq: 0, error: 'Set up iCloud first' };
+    }
     const seq = ++seqRef.current;
     const plain = {
       room: cfg.room, seq, kind,
@@ -162,11 +184,14 @@ export function useICloudRemote() {
     };
     try {
       await backendWriteCmd(cfg, plain);
-      burstFrames();
+      // a plain cursor move streams several per second — don't re-fetch frames for each one
+      if (kind !== 'move' || extra.final) burstFrames();
+      return { ok: true, seq };
     } catch (e) {
       const m = String(e.message || e);
       setStatus(m);
       if (!hasNativeCK && !cfgRef.current.webAuthToken && /AUTHENTICATION_REQUIRED|authentication|unauthenticated|\b401\b|\b421\b/i.test(m)) beginSignIn();
+      return { ok: false, seq, error: m };
     }
   }, [burstFrames, beginSignIn]);
 
@@ -176,7 +201,7 @@ export function useICloudRemote() {
     setConnected(true); setStatus('connecting…');
     pollFrame();
     sendCmd('shot');
-    pollRef.current = setInterval(pollFrame, 1300);
+    pollRef.current = setInterval(pollFrame, 1000);   // a by-name lookup is one cheap request
     // keepalive: tells the PC bridge a viewer is still here so it keeps polling fast and pushing
     // frames. Only when we can actually write (native, or signed in on web) — otherwise a failing
     // write would keep re-opening the Apple sign-in sheet.
