@@ -107,7 +107,10 @@ export function newRoom() {
   return s;
 }
 
-export function useICloudRemote() {
+export function useICloudRemote(activeRoom) {
+  // activeRoom overrides cfg.room (e.g. 'WEB' for the browser tab) without changing the saved desktop room,
+  // so Computer and Web are two tabs over the same container/creds — just different mailbox rooms.
+  const activeRoomRef = useRef(activeRoom || null);
   const [cfg, setCfgState] = useState(DEFAULT_CFG);
   const [loaded, setLoaded] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -208,7 +211,7 @@ export function useICloudRemote() {
   // the playback timer step them out at a steady cadence, so a burst of ring writes becomes smooth
   // motion instead of a stutter. (ack = delivery receipt: commands up to it have run on the PC.)
   const pollFrame = useCallback(async () => {
-    const cfg = cfgRef.current;
+    const cfg = { ...cfgRef.current, room: activeRoomRef.current || cfgRef.current.room };
     if (!cfg.container || !cfg.room || (!hasNativeCK && !cfg.token)) return;
     try {
       const frames = await backendRingFrames(cfg);                 // newest-first; may be 1 (old bridge) or many
@@ -275,7 +278,7 @@ export function useICloudRemote() {
   }, [setCfg, pushLog]);
 
   const sendCmd = useCallback(async (kind, extra = {}) => {
-    const cfg = cfgRef.current;
+    const cfg = { ...cfgRef.current, room: activeRoomRef.current || cfgRef.current.room };
     if (!cfg.container || !cfg.room || (!hasNativeCK && !cfg.token)) {
       setStatus('Set up iCloud first');
       return { ok: false, seq: 0, error: 'Set up iCloud first' };
@@ -306,7 +309,7 @@ export function useICloudRemote() {
     if (keepRef.current) clearInterval(keepRef.current);
     liveRef.current = false;
     bufRef.current = []; lastTsRef.current = 0; lastAckRef.current = 0;   // fresh buffer each connect
-    const c = cfgRef.current;
+    const c = { ...cfgRef.current, room: activeRoomRef.current || cfgRef.current.room };
     setConnected(true); setStatus('connecting…');
     pushLog('info', `connecting · ${hasNativeCK ? 'native' : 'web'} · env ${c.env} · room ${c.room}`);
     pollFrame();
@@ -342,6 +345,16 @@ export function useICloudRemote() {
     if (c.container && c.room && (hasNativeCK || c.token)) connect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded]);
+
+  // switch tabs (Computer <-> Web): point at the new room and refresh, without tearing the connection down
+  useEffect(() => {
+    activeRoomRef.current = activeRoom || null;
+    if (!connectedRef.current) return;
+    bufRef.current = []; lastTsRef.current = 0; lastAckRef.current = 0; liveRef.current = false;
+    setFrame(null); setStatus('switching…');
+    pollFrameRef.current(); sendCmdRef.current('shot');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRoom]);
 
   useEffect(() => () => {
     if (pollRef.current) clearInterval(pollRef.current);

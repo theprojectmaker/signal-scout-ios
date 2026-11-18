@@ -40,7 +40,8 @@ export default function ICloudRemoteScreen() {
   const s = styles(t);
   const insets = useSafeAreaInsets();
   const { height: winH } = useWindowDimensions();
-  const r = useICloudRemote();
+  const [mode, setMode] = useState('computer');   // 'computer' = your PC · 'web' = the iCloud web browser (room WEB)
+  const r = useICloudRemote(mode === 'web' ? 'WEB' : null);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [kbOpen, setKbOpen] = useState(false);
@@ -348,7 +349,7 @@ export default function ICloudRemoteScreen() {
     setTyped('');
   };
 
-  const title = r.native ? 'iCloud Remote' : 'iCloud Remote · web';
+  const title = mode === 'web' ? 'Web browser' : (r.native ? 'iCloud Remote' : 'iCloud Remote · web');
   const sub = cachedOnly
     ? (r.connected ? 'reconnecting…' : 'tap to resume')
     : r.frame
@@ -360,11 +361,19 @@ export default function ICloudRemoteScreen() {
       <View style={s.topBar}>
         <View style={s.dotRow}>
           <View style={[s.dot, { backgroundColor: dotColor }]} />
-          <Text style={s.topTxt} numberOfLines={1}>{title}  ·  {sub}</Text>
+          <Text style={[s.topTxt, toast && { color: toast.tone === 'bad' ? t.red : toast.tone === 'ok' ? t.green : t.label, fontWeight: '700' }]} numberOfLines={1}>{toast ? toast.text : `${title}  ·  ${sub}`}</Text>
         </View>
         <Pressable onPress={() => setMenuOpen(true)} hitSlop={10} style={s.menuBtn}>
           <Text style={s.menuDots}>•••</Text>
         </Pressable>
+      </View>
+
+      <View style={s.tabRow}>
+        {[['computer', '🖥  Computer'], ['web', '🌐  Web']].map(([m, label]) => (
+          <Pressable key={m} onPress={() => setMode(m)} style={[s.tabBtn, mode === m && s.tabBtnOn]}>
+            <Text style={[s.tabTxt, mode === m && s.tabTxtOn]} numberOfLines={1}>{label}</Text>
+          </Pressable>
+        ))}
       </View>
 
       <View
@@ -397,11 +406,11 @@ export default function ICloudRemoteScreen() {
               <Text style={s.emptyErr}>{r.status}</Text>
             ) : (
               <>
-                <Text style={s.emptyHint}>No screenshot yet. On your PC, make sure the Remote agent is running, then run:</Text>
-                <Text style={s.emptyCode}>node icloud-agent.js</Text>
+                <Text style={s.emptyHint}>{mode === 'web' ? 'No page yet. On your PC, the web browser agent should be running:' : 'No screenshot yet. On your PC, make sure the Remote agent is running, then run:'}</Text>
+                <Text style={s.emptyCode}>node {mode === 'web' ? 'browser-agent.js' : 'icloud-agent.js'}</Text>
               </>
             )}
-            <Text style={s.emptyMeta}>{r.native ? 'native' : 'web'} · env {r.cfg.env} · room {r.cfg.room || '—'}</Text>
+            <Text style={s.emptyMeta}>{r.native ? 'native' : 'web'} · env {r.cfg.env} · room {mode === 'web' ? 'WEB' : (r.cfg.room || '—')}</Text>
             {!r.native ? (
               <Text style={s.emptyWarn}>
                 This version signs in through Apple’s web login, whose token expires every few minutes, so it can’t be kept reliable.
@@ -438,15 +447,18 @@ export default function ICloudRemoteScreen() {
         {zoom > 1.01 ? (
           <Pressable style={s.resetZoom} onPress={() => applyZP(1, 0, 0)}><Text style={s.resetZoomTxt}>{Math.round(zoom * 100)}%  ✕</Text></Pressable>
         ) : null}
-        {toast ? (
-          <View style={[s.toast, toast.tone === 'ok' && s.toastOk, toast.tone === 'bad' && s.toastBad]} pointerEvents="none">
-            <Text style={s.toastTxt} numberOfLines={2}>{toast.text}</Text>
-          </View>
-        ) : null}
+        {/* feedback now shows in the top bar (next to •••) so it doesn't cover the screen */}
       </View>
 
       {/* power dock — the common controls one tap away, instead of digging through the ••• menu */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.dock} contentContainerStyle={s.dockRow} keyboardShouldPersistTaps="handled">
+        {mode === 'web' ? (
+          <>
+            <DockBtn s={s} glyph="‹" label="Back" onPress={() => fire('key', { text: 'BrowserBack' }, null, { label: 'Back' })} />
+            <DockBtn s={s} glyph="⟳" label="Reload" onPress={() => fire('key', { text: 'BrowserReload' }, null, { label: 'Reload' })} />
+            <DockBtn s={s} glyph="⌂" label="Home" onPress={() => fire('key', { text: 'BrowserHome' }, null, { label: 'Home' })} />
+          </>
+        ) : null}
         <DockBtn s={s} glyph="⌨" label="Keys" onPress={() => setKeysOpen(true)} />
         <DockBtn s={s} glyph="▲" label="Scroll" onPress={() => fire('wheel', { dy: -300 }, null, { label: 'Scroll up' })} />
         <DockBtn s={s} glyph="▼" label="Scroll" onPress={() => fire('wheel', { dy: 300 }, null, { label: 'Scroll down' })} />
@@ -454,9 +466,13 @@ export default function ICloudRemoteScreen() {
         <DockBtn s={s} glyph="✋" label="Drag" on={dragMode} onPress={() => setDragMode((v) => !v)} />
         <DockBtn s={s} glyph="＋" label="Zoom" onPress={() => zoomBy(1.6)} />
         <DockBtn s={s} glyph="－" label="Zoom" onPress={() => zoomBy(1 / 1.6)} />
-        <DockBtn s={s} glyph="🖥" label="Screen" onPress={() => fire('view', {}, null, { label: 'Switch screen' })} />
-        <DockBtn s={s} glyph="📖" label="HD" onPress={() => fire('hd', {}, null, { label: 'HD boost' })} />
-        <DockBtn s={s} glyph="?" label="Gestures" onPress={() => showToast('Move = mouse · tap = click · double-tap = double-click · hold = right-click · pinch = zoom · 2 fingers = pan', 'wait')} />
+        {mode !== 'web' ? (
+          <>
+            <DockBtn s={s} glyph="🖥" label="Screen" onPress={() => fire('view', {}, null, { label: 'Switch screen' })} />
+            <DockBtn s={s} glyph="📖" label="HD" onPress={() => fire('hd', {}, null, { label: 'HD boost' })} />
+          </>
+        ) : null}
+        <DockBtn s={s} glyph="?" label="Gestures" onPress={() => showToast(mode === 'web' ? 'Tap the blue bar to type a URL · tap links · scroll with ▲▼ or a drag · pinch to zoom' : 'Move = mouse · tap = click · double-tap = double-click · hold = right-click · pinch = zoom · 2 fingers = pan', 'wait')} />
       </ScrollView>
 
       {/* persistent typing bar — tap it and the keyboard rises; type + Send goes to the PC */}
@@ -473,7 +489,8 @@ export default function ICloudRemoteScreen() {
             returnKeyType="send"
             onSubmitEditing={() => { if (barText) { fire('type', { text: barText }, null, { label: 'Typing' }); setBarText(''); } }}
           />
-          <Pressable style={s.typeBarIcon} onPress={() => setKeysOpen(true)}><Text style={s.typeBarIconTxt}>⌨</Text></Pressable>
+          <Pressable style={s.typeBarIcon} onPress={() => fire('key', { text: 'BACKSPACE' }, null, { label: 'Backspace' })} hitSlop={6}><Text style={s.typeBarIconTxt}>⌫</Text></Pressable>
+          <Pressable style={s.typeBarIcon} onPress={() => setKeysOpen(true)} hitSlop={6}><Text style={s.typeBarIconTxt}>⌨</Text></Pressable>
           <Pressable style={s.typeBarSend} onPress={() => { if (barText) { fire('type', { text: barText }, null, { label: 'Typing' }); setBarText(''); } }}><Text style={s.typeBarSendTxt}>Send</Text></Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -665,6 +682,11 @@ const styles = (t) => {
     topTxt: { flex: 1, color: t.label2, fontSize: 11 },
     menuBtn: { backgroundColor: t.card, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 6, borderWidth: 1, borderColor: t.sep },
     menuDots: { color: t.label, fontSize: 14, fontWeight: '800', letterSpacing: 1 },
+    tabRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingBottom: 8 },
+    tabBtn: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 10, backgroundColor: t.card, borderWidth: StyleSheet.hairlineWidth, borderColor: t.sep },
+    tabBtnOn: { backgroundColor: t.blue, borderColor: t.blue },
+    tabTxt: { color: t.label2, fontSize: 13.5, fontWeight: '700' },
+    tabTxtOn: { color: '#fff' },
 
     screenWrap: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
     frame: { width: '100%', height: '100%' },
