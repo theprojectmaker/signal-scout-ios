@@ -1,6 +1,9 @@
 import { Tabs } from 'expo-router';
 import { useColorScheme } from 'react-native';
-import Svg, { Rect, Path } from 'react-native-svg';
+import Svg, { Rect, Path, Circle } from 'react-native-svg';
+
+// Signal Scout is a personal tool: a signal detector + remote control (PC remote, web-over-iCloud
+// browser, and the reachability lab). The AI / notes / photos / tools live in the Aria app instead.
 
 function ScoutIcon({ color }) {
   return (
@@ -12,26 +15,6 @@ function ScoutIcon({ color }) {
     </Svg>
   );
 }
-function ChatIcon({ color }) {
-  return (
-    <Svg width={26} height={26} viewBox="0 0 26 26">
-      <Path
-        d="M5 4.5h16A2.5 2.5 0 0 1 23.5 7v9A2.5 2.5 0 0 1 21 18.5H11l-5.3 4.2A.8.8 0 0 1 4.5 22v-3.5H5A2.5 2.5 0 0 1 2.5 16V7A2.5 2.5 0 0 1 5 4.5Z"
-        fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round"
-      />
-    </Svg>
-  );
-}
-
-function PhotosIcon({ color }) {
-  return (
-    <Svg width={26} height={26} viewBox="0 0 24 24">
-      <Path d="M4 6h3l1.5-2h7L17 6h3a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z" fill="none" stroke={color} strokeWidth={1.8} strokeLinejoin="round" />
-      <Path d="M15.5 13a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z" fill="none" stroke={color} strokeWidth={1.8} />
-    </Svg>
-  );
-}
-
 function RemoteIcon({ color }) {
   return (
     <Svg width={26} height={26} viewBox="0 0 24 24">
@@ -41,7 +24,6 @@ function RemoteIcon({ color }) {
     </Svg>
   );
 }
-
 function BrowserIcon({ color }) {
   return (
     <Svg width={26} height={26} viewBox="0 0 24 24">
@@ -50,29 +32,12 @@ function BrowserIcon({ color }) {
     </Svg>
   );
 }
-
-function ShareIcon({ color }) {
+function LabIcon({ color }) {
   return (
     <Svg width={26} height={26} viewBox="0 0 24 24">
-      <Path d="M12 3v12M12 3l-4 4M12 3l4 4" fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
-      <Path d="M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6" fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
-    </Svg>
-  );
-}
-
-function LightIcon({ color }) {
-  return (
-    <Svg width={26} height={26} viewBox="0 0 24 24">
-      <Path d="M9 3h6v4a3 3 0 0 1-.9 2.1L13 10.2V14h-2v-3.8L9.9 9.1A3 3 0 0 1 9 7V3Z" fill="none" stroke={color} strokeWidth={1.8} strokeLinejoin="round" />
-      <Path d="M11 14h2v6a1 1 0 0 1-2 0v-6Z" fill={color} />
-    </Svg>
-  );
-}
-
-function MoreIcon({ color }) {
-  return (
-    <Svg width={26} height={26} viewBox="0 0 24 24">
-      <Path d="M5 12h.01M12 12h.01M19 12h.01" fill="none" stroke={color} strokeWidth={3} strokeLinecap="round" />
+      <Circle cx="12" cy="12" r="2.2" fill={color} />
+      <Path d="M12 5.5a6.5 6.5 0 0 1 6.5 6.5M12 2.5A9.5 9.5 0 0 1 21.5 12" fill="none" stroke={color} strokeWidth={1.7} strokeLinecap="round" />
+      <Path d="M12 18.5A6.5 6.5 0 0 1 5.5 12M12 21.5A9.5 9.5 0 0 1 2.5 12" fill="none" stroke={color} strokeWidth={1.7} strokeLinecap="round" />
     </Svg>
   );
 }
@@ -93,17 +58,10 @@ export default function TabsLayout() {
       }}
     >
       <Tabs.Screen name="index" options={{ title: 'Scout', tabBarIcon: ({ color }) => <ScoutIcon color={color} /> }} />
-      <Tabs.Screen name="chat" options={{ title: 'Chat', tabBarIcon: ({ color }) => <ChatIcon color={color} /> }} />
       <Tabs.Screen name="icloudremote" options={{ title: 'Remote', tabBarIcon: ({ color }) => <RemoteIcon color={color} /> }} />
-      <Tabs.Screen name="share" options={{ title: 'Share', tabBarIcon: ({ color }) => <ShareIcon color={color} /> }} />
-      <Tabs.Screen name="more" options={{ title: 'More', tabBarIcon: ({ color }) => <MoreIcon color={color} /> }} />
-      {/* reachable from the More menu, hidden from the tab bar */}
-      <Tabs.Screen name="browser" options={{ href: null, title: 'Browser', tabBarIcon: ({ color }) => <BrowserIcon color={color} /> }} />
-      <Tabs.Screen name="photos" options={{ href: null, title: 'Photos', tabBarIcon: ({ color }) => <PhotosIcon color={color} /> }} />
-      <Tabs.Screen name="light" options={{ href: null, title: 'Light', tabBarIcon: ({ color }) => <LightIcon color={color} /> }} />
-      <Tabs.Screen name="notes" options={{ href: null, title: 'Notes' }} />
-      <Tabs.Screen name="tools" options={{ href: null, title: 'Tools' }} />
-      <Tabs.Screen name="probe" options={{ href: null, title: 'Reachability Lab' }} />
+      <Tabs.Screen name="browser" options={{ title: 'Web', tabBarIcon: ({ color }) => <BrowserIcon color={color} /> }} />
+      <Tabs.Screen name="probe" options={{ title: 'Lab', tabBarIcon: ({ color }) => <LabIcon color={color} /> }} />
+      {/* Live Remote (normal-Wi-Fi backup) — reached from the Remote tab's ••• menu, hidden from the bar */}
       <Tabs.Screen name="remote" options={{ href: null, title: 'Live Remote' }} />
     </Tabs>
   );
