@@ -79,6 +79,15 @@ export default function ICloudRemoteScreen() {
   useEffect(() => { sendRef.current = r.sendCmd; }, [r.sendCmd]);
   useEffect(() => { dragModeRef.current = dragMode; }, [dragMode]);
 
+  // Auto-connect once when the screen first opens with a ready config, so reopening the app resumes
+  // the live stream on its own. Fires a single time per mount — a manual Disconnect is respected.
+  const autoConnectedRef = useRef(false);
+  useEffect(() => {
+    if (autoConnectedRef.current || !r.loaded) return;
+    const ready = r.cfg.container && r.cfg.room && (r.native || r.cfg.token);
+    if (ready && !r.connected) { autoConnectedRef.current = true; r.connect(); }
+  }, [r.loaded, r.cfg, r.native, r.connected, r.connect]);
+
   // box point → PC pixel, undoing zoom/pan then the letterbox
   const mapPt = useCallback((lx, ly) => {
     const f = frameRef.current;
@@ -291,7 +300,10 @@ export default function ICloudRemoteScreen() {
 
   const needsSetup = !r.cfg.container || !r.cfg.room || (!r.native && !r.cfg.token);
   const errish = /error|fail|401|403|AUTHENTICATION|unauthenticated|CloudKit \d/i.test(r.status || '');
-  const frameAgeS = r.frame ? Math.max(0, Math.round((Date.now() - (r.frame.rxAt || r.frame.ts)) / 1000)) : null;
+  // A cached frame (shown instantly on reopen, before the stream resumes) isn't "stale" — it's the
+  // last screen while we reconnect. Only live frames get an age / stale check.
+  const cachedOnly = !!(r.frame && r.frame.cached);
+  const frameAgeS = r.frame && !cachedOnly ? Math.max(0, Math.round((Date.now() - (r.frame.rxAt || r.frame.ts)) / 1000)) : null;
   const stale = frameAgeS != null && frameAgeS > 40;
   const live = r.connected && !!r.frame && !errish && !stale;
   const dotColor = errish ? t.red : live ? t.green : r.connected ? '#FF9F0A' : t.label3;
@@ -304,7 +316,9 @@ export default function ICloudRemoteScreen() {
   };
 
   const title = r.native ? 'native iCloud' : 'web iCloud';
-  const sub = r.frame
+  const sub = cachedOnly
+    ? (r.connected ? 'showing last screen · reconnecting…' : 'last screen · tap Connect to resume')
+    : r.frame
     ? (stale ? `last frame ${frameAgeS}s ago — is the PC bridge running?` : `${r.frame.w}×${r.frame.h} · ${r.frame.kb || '?'}KB · ${frameAgeS}s ago`)
     : r.connected ? (errish ? r.status : 'waiting for your PC…') : 'not connected';
 

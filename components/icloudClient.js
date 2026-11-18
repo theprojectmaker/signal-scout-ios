@@ -9,7 +9,10 @@
 //   RCFrame : room(String) seq(Int64) jpeg(String base64) w(Int64) h(Int64) ts(Int64)
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const FRAME_CACHE = 'icloud_last_frame_v1';   // the last screen, so a reopen shows it instantly
 import Constants from 'expo-constants';
 import { hasNativeCK, nativePut, nativeGet } from './icloudNative';
 
@@ -123,6 +126,36 @@ export function useICloudRemote() {
   // a single place that both shows the user the status AND records it in the log
   const fail = useCallback((msg) => { setStatus(String(msg)); pushLog('error', msg); }, [pushLog]);
 
+  // ---- make reopen feel continuous (iOS can't stream while the app is closed) ----
+  // Keep the newest frame and persist it (throttled) so a relaunch shows the last screen instantly;
+  // on foreground, resume streaming. The bridge still idles while closed, so there's no ongoing cost.
+  const lastFrameObjRef = useRef(null);
+  const framePersistRef = useRef(0);
+  const connectedRef = useRef(false);
+  const sendCmdRef = useRef(() => {});
+  const persistFrame = useCallback((fr, force) => {
+    lastFrameObjRef.current = fr;
+    const now = Date.now();
+    if (!force && now - framePersistRef.current < 4000) return;
+    framePersistRef.current = now;
+    AsyncStorage.setItem(FRAME_CACHE, JSON.stringify({ jpeg: fr.jpeg, w: fr.w, h: fr.h, ts: fr.ts })).catch(() => {});
+  }, []);
+  useEffect(() => {
+    AsyncStorage.getItem(FRAME_CACHE).then((v) => {
+      if (v && !lastFrameObjRef.current) {
+        try { const fr = JSON.parse(v); if (fr && fr.jpeg) setFrame({ ...fr, rxAt: 0, cached: true, kb: Math.round((fr.jpeg.length * 0.75) / 1024) }); } catch (e) {}
+      }
+    }).catch(() => {});
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'active') {
+        if (connectedRef.current) { pollFrameRef.current(); const c = cfgRef.current; if (hasNativeCK || c.webAuthToken) sendCmdRef.current('shot'); }
+      } else if (lastFrameObjRef.current) {
+        persistFrame(lastFrameObjRef.current, true);   // save the last screen right before we're suspended
+      }
+    });
+    return () => sub.remove();
+  }, [persistFrame]);
+
   useEffect(() => {
     AsyncStorage.getItem(CFG_KEY).then((v) => {
       // start from the injected defaults; let any non-empty saved override win (⚙ edits persist)
@@ -162,7 +195,9 @@ export function useICloudRemote() {
           // ack = 0  → older bridge: it can't confirm, so the screen says "sent" rather than guess.
           // rxAt = when THIS phone received the frame. Age is measured from this, never from the
           // PC's clock (fr.ts), so clock skew can't make a fresh frame read as "1500s ago".
-          setFrame({ ...fr, ack: fr.seq < 0 ? -fr.seq : 0, rxAt: Date.now(), kb: Math.round((fr.jpeg.length * 0.75) / 1024) });
+          const withMeta = { ...fr, ack: fr.seq < 0 ? -fr.seq : 0, rxAt: Date.now(), kb: Math.round((fr.jpeg.length * 0.75) / 1024) };
+          setFrame(withMeta);
+          persistFrame(withMeta);   // cache so a reopen shows this screen instantly
           if (!liveRef.current) { liveRef.current = true; pushLog('ok', `screen is live (${fr.w}×${fr.h}, ${hasNativeCK ? 'native' : 'web'})`); }
         }
         setStatus('connected');
@@ -171,6 +206,7 @@ export function useICloudRemote() {
   }, [pushLog, fail]);
 
   useEffect(() => { pollFrameRef.current = pollFrame; }, [pollFrame]);
+  useEffect(() => { connectedRef.current = connected; }, [connected]);
 
   // After an action, re-check for the new screenshot sooner than the steady poll. Rate-limited so a
   // stream of cursor moves can't turn into a flood of CloudKit queries.
@@ -227,6 +263,7 @@ export function useICloudRemote() {
       return { ok: false, seq, error: m };
     }
   }, [burstFrames, beginSignIn, pushLog]);
+  useEffect(() => { sendCmdRef.current = sendCmd; }, [sendCmd]);
 
   const connect = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current);
