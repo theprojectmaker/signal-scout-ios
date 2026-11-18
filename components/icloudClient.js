@@ -15,6 +15,7 @@ import { hasNativeCK, nativePut, nativeGet } from './icloudNative';
 
 const RC = (Constants.expoConfig && Constants.expoConfig.extra && Constants.expoConfig.extra.rc) || {};
 const CFG_KEY = 'icloud_remote_cfg_v1';
+const LOG_KEY = 'icloud_remote_log_v1';   // errors persist here so a crash/restart keeps the last failures
 // CloudKit API tokens are per-environment: pick the one matching the env.
 export const tokenForEnv = (env) => (env === 'development' ? RC.cloudkitTokenDev : RC.cloudkitTokenProd) || '';
 const DEFAULT_CFG = {
@@ -96,8 +97,31 @@ export function useICloudRemote() {
   const pollRef = useRef(null);
   const keepRef = useRef(null);
   const lastTsRef = useRef(0);
+  const liveRef = useRef(false);   // have we received at least one frame this session
   const cfgRef = useRef(DEFAULT_CFG);
   const pollFrameRef = useRef(() => {});
+
+  // ---- in-app event log (so a failure is diagnosable without a cable) ----
+  const logRef = useRef([]);
+  const [log, setLog] = useState([]);
+  const logSaveRef = useRef(0);
+  const pushLog = useCallback((level, msg) => {
+    const e = { t: Date.now(), level, msg: String(msg == null ? '' : msg).slice(0, 400) };
+    const next = [...logRef.current, e].slice(-150);
+    logRef.current = next; setLog(next);
+    if (level === 'error' || level === 'ok') {
+      const now = Date.now();
+      if (now - logSaveRef.current > 1500) { logSaveRef.current = now; AsyncStorage.setItem(LOG_KEY, JSON.stringify(next.slice(-80))).catch(() => {}); }
+    }
+  }, []);
+  const clearLog = useCallback(() => { logRef.current = []; setLog([]); AsyncStorage.removeItem(LOG_KEY).catch(() => {}); }, []);
+  useEffect(() => {
+    AsyncStorage.getItem(LOG_KEY).then((v) => {
+      if (v) { try { const prev = JSON.parse(v); if (Array.isArray(prev) && prev.length) { logRef.current = prev; setLog(prev); } } catch (e) {} }
+    }).catch(() => {});
+  }, []);
+  // a single place that both shows the user the status AND records it in the log
+  const fail = useCallback((msg) => { setStatus(String(msg)); pushLog('error', msg); }, [pushLog]);
 
   useEffect(() => {
     AsyncStorage.getItem(CFG_KEY).then((v) => {
@@ -136,12 +160,15 @@ export function useICloudRemote() {
           // The PC bridge writes seq = -(newest command it has executed) as a delivery receipt.
           // ack > 0  → this bridge reports receipts (every command with seq <= ack has run).
           // ack = 0  → older bridge: it can't confirm, so the screen says "sent" rather than guess.
-          setFrame({ ...fr, ack: fr.seq < 0 ? -fr.seq : 0 });
+          // rxAt = when THIS phone received the frame. Age is measured from this, never from the
+          // PC's clock (fr.ts), so clock skew can't make a fresh frame read as "1500s ago".
+          setFrame({ ...fr, ack: fr.seq < 0 ? -fr.seq : 0, rxAt: Date.now() });
+          if (!liveRef.current) { liveRef.current = true; pushLog('ok', `screen is live (${fr.w}×${fr.h}, ${hasNativeCK ? 'native' : 'web'})`); }
         }
         setStatus('connected');
       } else { setStatus('waiting for your PC…'); }
-    } catch (e) { setStatus(String(e.message || e)); }
-  }, []);
+    } catch (e) { fail(e.message || e); }
+  }, [pushLog, fail]);
 
   useEffect(() => { pollFrameRef.current = pollFrame; }, [pollFrame]);
 
@@ -163,17 +190,17 @@ export function useICloudRemote() {
     try {
       const res = await fetch(`${ckBase(cfg, 'users', 'caller')}?ckAPIToken=${encodeURIComponent(cfg.token)}`, { method: 'GET' });
       const text = await res.text(); let j; try { j = JSON.parse(text); } catch (e) { j = {}; }
-      if (j.redirectURL) { setAuthUrl(j.redirectURL); setStatus('sign in to control'); }
+      if (j.redirectURL) { setAuthUrl(j.redirectURL); setStatus('sign in to control'); pushLog('info', 'opening Apple sign-in (web route needs it)'); }
       else if (res.ok) { setStatus('already signed in'); }
-      else { setStatus('sign-in unavailable: ' + (j.serverErrorCode || res.status)); }
-    } catch (e) { setStatus(String(e.message || e)); }
-  }, []);
+      else { fail('sign-in unavailable: ' + (j.serverErrorCode || res.status)); }
+    } catch (e) { fail(e.message || e); }
+  }, [pushLog, fail]);
 
   const completeSignIn = useCallback((token) => {
     if (!token) { setAuthUrl(null); return; }
     setCfg({ webAuthToken: token });
-    setAuthUrl(null); setStatus('signed in — controls ready');
-  }, [setCfg]);
+    setAuthUrl(null); setStatus('signed in — controls ready'); pushLog('ok', 'signed in to iCloud');
+  }, [setCfg, pushLog]);
 
   const sendCmd = useCallback(async (kind, extra = {}) => {
     const cfg = cfgRef.current;
@@ -195,15 +222,19 @@ export function useICloudRemote() {
     } catch (e) {
       const m = String(e.message || e);
       setStatus(m);
+      pushLog('error', `${kind} failed: ${m}`);
       if (!hasNativeCK && !cfgRef.current.webAuthToken && /AUTHENTICATION_REQUIRED|authentication|unauthenticated|\b401\b|\b421\b/i.test(m)) beginSignIn();
       return { ok: false, seq, error: m };
     }
-  }, [burstFrames, beginSignIn]);
+  }, [burstFrames, beginSignIn, pushLog]);
 
   const connect = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current);
     if (keepRef.current) clearInterval(keepRef.current);
+    liveRef.current = false;
+    const c = cfgRef.current;
     setConnected(true); setStatus('connecting…');
+    pushLog('info', `connecting · ${hasNativeCK ? 'native' : 'web'} · env ${c.env} · room ${c.room}`);
     pollFrame();
     sendCmd('shot');
     pollRef.current = setInterval(pollFrame, 1000);   // a by-name lookup is one cheap request
@@ -214,13 +245,13 @@ export function useICloudRemote() {
       const c = cfgRef.current;
       if (hasNativeCK || c.webAuthToken) sendCmd('shot');
     }, 25000);
-  }, [pollFrame, sendCmd]);
+  }, [pollFrame, sendCmd, pushLog]);
 
   const disconnect = useCallback(() => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     if (keepRef.current) { clearInterval(keepRef.current); keepRef.current = null; }
-    setConnected(false); setStatus('');
-  }, []);
+    setConnected(false); setStatus(''); pushLog('info', 'disconnected');
+  }, [pushLog]);
 
   // auto-connect on open when pre-configured
   useEffect(() => {
@@ -240,5 +271,6 @@ export function useICloudRemote() {
     native: hasNativeCK, signedIn: hasNativeCK || !!cfg.webAuthToken,
     setCfg, connect, disconnect, sendCmd, requestShot: () => sendCmd('shot'),
     beginSignIn, completeSignIn,
+    log, clearLog, pushLog,
   };
 }

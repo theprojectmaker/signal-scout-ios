@@ -7,6 +7,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { WebView } from 'react-native-webview';
 import Svg, { Path } from 'react-native-svg';
 import { router } from 'expo-router';
+import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '../../components/theme';
 import { useICloudRemote, newRoom } from '../../components/icloudClient';
 
@@ -43,6 +44,7 @@ export default function ICloudRemoteScreen() {
   const [kbOpen, setKbOpen] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
   const [typed, setTyped] = useState('');
   const [dragMode, setDragMode] = useState(false);
   const [sharp, setSharp] = useState(false);
@@ -287,7 +289,7 @@ export default function ICloudRemoteScreen() {
 
   const needsSetup = !r.cfg.container || !r.cfg.room || (!r.native && !r.cfg.token);
   const errish = /error|fail|401|403|AUTHENTICATION|unauthenticated|CloudKit \d/i.test(r.status || '');
-  const frameAgeS = r.frame ? Math.max(0, Math.round((Date.now() - r.frame.ts) / 1000)) : null;
+  const frameAgeS = r.frame ? Math.max(0, Math.round((Date.now() - (r.frame.rxAt || r.frame.ts)) / 1000)) : null;
   const stale = frameAgeS != null && frameAgeS > 40;
   const live = r.connected && !!r.frame && !errish && !stale;
   const dotColor = errish ? t.red : live ? t.green : r.connected ? '#FF9F0A' : t.label3;
@@ -406,10 +408,12 @@ export default function ICloudRemoteScreen() {
               <MenuItem s={s} label="Zoom in" onPress={doMenu(() => zoomBy(1.6))} />
               <MenuItem s={s} label="Zoom out" onPress={doMenu(() => zoomBy(1 / 1.6))} />
               {zoom > 1.01 ? <MenuItem s={s} label="Reset zoom" onPress={doMenu(() => applyZP(1, 0, 0))} /> : null}
-              <MenuItem s={s} label={`Sharp picture: ${sharp ? 'ON' : 'off'}`} accent={sharp}
-                onPress={doMenu(() => { const n = !sharp; setSharp(n); fire('quality', { text: n ? 'sharp' : 'saver' }, null, { label: n ? 'Sharp picture' : 'Saver picture' }); })} />
+              <MenuItem s={s} label="📖 HD — read clearly (5s)" onPress={doMenu(() => fire('hd', {}, null, { label: 'HD boost' }))} />
+              <MenuItem s={s} label={sharp ? 'Picture: fast (for slow Wi-Fi)' : 'Picture: clear'} accent={sharp}
+                onPress={doMenu(() => { const n = !sharp; setSharp(n); fire('quality', { text: n ? 'fast' : 'clear' }, null, { label: n ? 'Fast picture' : 'Clear picture' }); })} />
               {r.connected && !r.signedIn ? <MenuItem s={s} label="Sign in to control" onPress={doMenu(r.beginSignIn)} /> : null}
               <MenuItem s={s} label="Live Remote (faster, normal Wi-Fi)" onPress={doMenu(() => router.push('/remote'))} />
+              <MenuItem s={s} label="Error log" onPress={doMenu(() => setLogOpen(true))} />
               <MenuItem s={s} label="Settings" onPress={doMenu(() => setSetupOpen(true))} />
               {r.connected
                 ? <MenuItem s={s} label="Disconnect" danger last onPress={doMenu(r.disconnect)} />
@@ -477,6 +481,31 @@ export default function ICloudRemoteScreen() {
             </ScrollView>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* ============ error log ============ */}
+      <Modal visible={logOpen} transparent animationType="slide" onRequestClose={() => setLogOpen(false)}>
+        <View style={s.kbWrap}>
+          <View style={[s.sheet, { maxHeight: '82%' }]}>
+            <View style={s.sheetHead}>
+              <Text style={s.sheetTitle}>Error log</Text>
+              <View style={{ flexDirection: 'row', gap: 18 }}>
+                <Pressable onPress={async () => { await Clipboard.setStringAsync((r.log || []).map((e) => `${new Date(e.t).toLocaleTimeString()} ${e.level} ${e.msg}`).join('\n')); }}><Text style={s.sheetDone}>Copy</Text></Pressable>
+                <Pressable onPress={r.clearLog}><Text style={[s.sheetDone, { color: t.red }]}>Clear</Text></Pressable>
+                <Pressable onPress={() => setLogOpen(false)}><Text style={s.sheetDone}>Done</Text></Pressable>
+              </View>
+            </View>
+            <ScrollView style={{ maxHeight: 440 }}>
+              {(r.log || []).length === 0
+                ? <Text style={s.fieldHint}>No events yet. Connection, errors and confirmations show up here.</Text>
+                : [...r.log].reverse().map((e, i) => (
+                  <Text key={i} style={{ color: e.level === 'error' ? t.red : e.level === 'ok' ? t.green : t.label2, fontSize: 12, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginBottom: 3 }}>
+                    {new Date(e.t).toLocaleTimeString()} · {e.msg}
+                  </Text>
+                ))}
+            </ScrollView>
+          </View>
+        </View>
       </Modal>
 
       {/* ============ Apple sign-in (web path) ============ */}
