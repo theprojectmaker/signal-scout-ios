@@ -94,7 +94,7 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" options={{ title: 'Scout', tabBarIcon: ({ color }) => <ScoutIcon color={color} /> }} />
       <Tabs.Screen name="chat" options={{ title: 'Chat', tabBarIcon: ({ color }) => <ChatIcon color={color} /> }} />
-      <Tabs.Screen name="remote" options={{ title: 'Remote', tabBarIcon: ({ color }) => <RemoteIcon color={color} /> }} />
+      <Tabs.Screen name="icloudremote" options={{ title: 'Remote', tabBarIcon: ({ color }) => <RemoteIcon color={color} /> }} />
       <Tabs.Screen name="share" options={{ title: 'Share', tabBarIcon: ({ color }) => <ShareIcon color={color} /> }} />
       <Tabs.Screen name="more" options={{ title: 'More', tabBarIcon: ({ color }) => <MoreIcon color={color} /> }} />
       {/* reachable from the More menu, hidden from the tab bar */}
@@ -104,7 +104,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="notes" options={{ href: null, title: 'Notes' }} />
       <Tabs.Screen name="tools" options={{ href: null, title: 'Tools' }} />
       <Tabs.Screen name="probe" options={{ href: null, title: 'Reachability Lab' }} />
-      <Tabs.Screen name="icloudremote" options={{ href: null, title: 'iCloud Remote' }} />
+      <Tabs.Screen name="remote" options={{ href: null, title: 'Live Remote' }} />
     </Tabs>
   );
 }
