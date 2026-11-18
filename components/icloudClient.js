@@ -18,7 +18,7 @@ const CFG_KEY = 'icloud_remote_cfg_v1';
 const DEFAULT_CFG = {
   container: RC.container || 'iCloud.com.solyapps.signalscout',
   token: RC.cloudkitToken || '',          // secret: comes from env via app.config.js, else ⚙ paste
-  env: RC.env || 'development',
+  env: RC.env || 'production',           // native build uses prod CloudKit; keep web path aligned
   room: RC.room || 'SOLYPC',              // not secret — pairing room default
   webAuthToken: '',
 };

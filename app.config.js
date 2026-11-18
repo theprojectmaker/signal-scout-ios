@@ -23,7 +23,7 @@ module.exports = ({ config }) => ({
       // iCloud Remote (CloudKit)
       container: process.env.RC_CK_CONTAINER || 'iCloud.com.solyapps.signalscout',
       room: process.env.RC_ROOM || 'SOLYPC',
-      env: process.env.RC_CK_ENV || 'development',
+      env: process.env.RC_CK_ENV || 'production',
       // SECRETS — env only; leave empty if unset, never commit a value
       cloudkitToken: process.env.RC_CLOUDKIT_TOKEN || '',
       password: process.env.RC_PASSWORD || '',
