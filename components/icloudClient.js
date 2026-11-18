@@ -15,9 +15,11 @@ import { hasNativeCK, nativeSave, nativeQuery } from './icloudNative';
 
 const RC = (Constants.expoConfig && Constants.expoConfig.extra && Constants.expoConfig.extra.rc) || {};
 const CFG_KEY = 'icloud_remote_cfg_v1';
+// CloudKit API tokens are per-environment: pick the one matching the env.
+export const tokenForEnv = (env) => (env === 'development' ? RC.cloudkitTokenDev : RC.cloudkitTokenProd) || '';
 const DEFAULT_CFG = {
   container: RC.container || 'iCloud.com.solyapps.signalscout',
-  token: RC.cloudkitToken || '',          // secret: comes from env via app.config.js, else ⚙ paste
+  token: tokenForEnv(RC.env || 'production'),   // secret: from env via app.config.js, else ⚙ paste
   env: RC.env || 'production',           // native build uses prod CloudKit; keep web path aligned
   room: RC.room || 'SOLYPC',              // not secret — pairing room default
   webAuthToken: '',
@@ -100,6 +102,11 @@ export function useICloudRemote() {
   }, []);
 
   const setCfg = useCallback((patch) => {
+    // switching env swaps in that env's baked token (unless the user typed one in the same patch)
+    if (patch.env && patch.env !== cfgRef.current.env && patch.token == null) {
+      const t = tokenForEnv(patch.env);
+      if (t) patch = { ...patch, token: t };
+    }
     const c = { ...cfgRef.current, ...patch };
     cfgRef.current = c; setCfgState(c);
     AsyncStorage.setItem(CFG_KEY, JSON.stringify(c)).catch(() => {});

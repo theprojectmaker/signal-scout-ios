@@ -24,8 +24,10 @@ module.exports = ({ config }) => ({
       container: process.env.RC_CK_CONTAINER || 'iCloud.com.solyapps.signalscout',
       room: process.env.RC_ROOM || 'SOLYPC',
       env: process.env.RC_CK_ENV || 'production',
-      // SECRETS — env only; leave empty if unset, never commit a value
-      cloudkitToken: process.env.RC_CLOUDKIT_TOKEN || '',
+      // SECRETS — env only; leave empty if unset, never commit a value.
+      // CloudKit tokens are per-environment, so carry both; the app picks by env.
+      cloudkitTokenProd: process.env.RC_CLOUDKIT_TOKEN || '',       // GitHub secret = production token
+      cloudkitTokenDev: process.env.RC_CLOUDKIT_TOKEN_DEV || '',
       password: process.env.RC_PASSWORD || '',
     },
   },
