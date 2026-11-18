@@ -7,7 +7,7 @@ import { useTheme } from '../../components/theme';
 import { buildProbes } from '../../data/probes';
 
 const STORE_KEY = 'probe_results_v2';
-const CONCURRENCY = 50;     // 8k+ endpoints — run many at once (most non-resolving hosts fail fast)
+const CONCURRENCY = 64;     // 12k+ endpoints — run many at once (most non-resolving hosts fail fast)
 const TIMEOUT_MS = 5000;
 const ROW_H = 58;
 
