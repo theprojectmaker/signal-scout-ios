@@ -7,7 +7,7 @@ import { useTheme } from '../../components/theme';
 import { buildProbes } from '../../data/probes';
 
 const STORE_KEY = 'probe_results_v2';
-const CONCURRENCY = 16;
+const CONCURRENCY = 50;     // 8k+ endpoints — run many at once (most non-resolving hosts fail fast)
 const TIMEOUT_MS = 5000;
 const ROW_H = 58;
 
@@ -78,7 +78,7 @@ export default function ProbeScreen() {
         const r = await testOne(p);
         resultsRef.current[p.id] = r;
         done++; sinceSave++;
-        if (sinceSave >= 20) { sinceSave = 0; setResults({ ...resultsRef.current }); save(); }
+        if (sinceSave >= 80) { sinceSave = 0; setResults({ ...resultsRef.current }); save(); }   // batch UI/storage for 8k list
         setProgress({ done, total: list.length });
       }
     };
@@ -162,7 +162,8 @@ export default function ProbeScreen() {
         <Text style={s.title}>Reachability Lab</Text>
         <Text style={s.subtitle}>
           {probes.length} real endpoints. Run this on the locked network — green ones are doors.
-          ⭐ marks services that could carry remote control.
+          ⭐ marks services that could carry remote control. A full run takes a few minutes; most will
+          be blocked (that's expected on an Apple-only network) — watch for any surprise greens.
         </Text>
       </View>
 
