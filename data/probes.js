@@ -620,6 +620,10 @@ const GROUPS3 = [
   ]],
 ];
 
+// Apple runs iCloud services across many partition servers (p01-…-pNN.icloud.com). These are real Apple
+// hosts, all channel-capable — any that answers on the locked net is a candidate Apple-hosted mailbox.
+const APPLE_PART_SVCS = ['caldav', 'carddav', 'ckdatabasews', 'ckdatabase', 'contacts', 'reminders', 'notes', 'docws', 'ubiquityws', 'keyvalueservice', 'fmip', 'fmf', 'mailws', 'streams', 'sharedstreams'];
+
 export function buildProbes() {
   const out = [];
   let n = 0;
@@ -696,6 +700,11 @@ export function buildProbes() {
   }
   for (const r of AWS_REGIONS) for (const svc of AWS_SERVICES3) add(`${svc}.${r}`, 'AWS extra 2 (channels ⭐)', 'https', `${svc}.${r}.amazonaws.com`, true);
   for (const r of GCP_REGIONS) for (const svc of GCP_REGIONAL_SVCS) add(`${r}-${svc}`, 'GCP regional (channels ⭐)', 'https', `${r}-${svc}.googleapis.com`, true);
+  // Apple iCloud partition servers p01..p70 × services — real Apple hosts, all channel-capable (⭐⭐).
+  for (let pn = 1; pn <= 70; pn++) {
+    const pp = 'p' + String(pn).padStart(2, '0');
+    for (const s of APPLE_PART_SVCS) add(`${pp}-${s}.icloud.com`, 'Apple iCloud partitions (channels ⭐⭐)', 'https', `${pp}-${s}.icloud.com`, true);
+  }
 
   return out;
 }
