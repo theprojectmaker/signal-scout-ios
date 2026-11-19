@@ -54,6 +54,7 @@ export default function ICloudRemoteScreen() {
   const [keysOpen, setKeysOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
+  const [screenPickOpen, setScreenPickOpen] = useState(false);
   const [barText, setBarText] = useState('');
   const [typed, setTyped] = useState('');
   const [dragMode, setDragMode] = useState(false);
@@ -508,7 +509,7 @@ export default function ICloudRemoteScreen() {
         <DockBtn s={s} glyph="－" label="Zoom" onPress={() => zoomBy(1 / 1.6)} />
         {mode !== 'web' ? (
           <>
-            <DockBtn s={s} glyph="🖥" label="Screen" onPress={() => fire('view', {}, null, { label: 'Switch screen' })} />
+            <DockBtn s={s} glyph="🖥" label="Screens" onPress={() => setScreenPickOpen(true)} />
             <DockBtn s={s} glyph="📖" label="HD" onPress={() => fire('hd', {}, null, { label: 'HD boost' })} />
           </>
         ) : null}
@@ -526,12 +527,12 @@ export default function ICloudRemoteScreen() {
             placeholderTextColor={t.label3}
             autoCapitalize="none"
             autoCorrect={false}
-            returnKeyType="send"
-            onSubmitEditing={() => { if (barText) { fire('type', { text: barText }, null, { label: 'Typing' }); setBarText(''); } }}
+            returnKeyType="go"
+            onSubmitEditing={() => { if (barText) fire('type', { text: barText }, null, { label: 'Typing' }); fire('key', { text: 'ENTER' }, null, { label: 'Enter' }); setBarText(''); }}
           />
           <Pressable style={s.typeBarIcon} onPress={() => fire('key', { text: 'BACKSPACE' }, null, { label: 'Backspace' })} hitSlop={6}><Text style={s.typeBarIconTxt}>⌫</Text></Pressable>
-          <Pressable style={s.typeBarIcon} onPress={() => setKeysOpen(true)} hitSlop={6}><Text style={s.typeBarIconTxt}>⌨</Text></Pressable>
-          <Pressable style={s.typeBarSend} onPress={() => { if (barText) { fire('type', { text: barText }, null, { label: 'Typing' }); setBarText(''); } }}><Text style={s.typeBarSendTxt}>Send</Text></Pressable>
+          <Pressable style={s.typeBarGhost} onPress={() => { if (barText) { fire('type', { text: barText }, null, { label: 'Typing' }); setBarText(''); } }}><Text style={s.typeBarGhostTxt}>Send</Text></Pressable>
+          <Pressable style={s.typeBarSend} onPress={() => { if (barText) fire('type', { text: barText }, null, { label: 'Typing' }); fire('key', { text: 'ENTER' }, null, { label: 'Enter' }); setBarText(''); }}><Text style={s.typeBarSendTxt}>↵ Enter</Text></Pressable>
         </View>
       </KeyboardAvoidingView>
 
@@ -589,6 +590,24 @@ export default function ICloudRemoteScreen() {
                 </View>
               ))}
             </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* ============ screen picker (multi-monitor) ============ */}
+      <Modal visible={screenPickOpen} transparent animationType="fade" onRequestClose={() => setScreenPickOpen(false)}>
+        <Pressable style={s.keysBackdrop} onPress={() => setScreenPickOpen(false)}>
+          <Pressable style={s.keysCard} onPress={() => {}}>
+            <View style={s.sheetHead}><Text style={s.sheetTitle}>Screens</Text><Pressable onPress={() => setScreenPickOpen(false)} hitSlop={8}><Text style={s.sheetDone}>Done</Text></Pressable></View>
+            <Text style={s.fieldHint}>Pick a monitor to view, or see them all at once. Options past your monitor count simply do nothing.</Text>
+            {[['0', '🖥  Screen 1'], ['1', '🖥  Screen 2'], ['2', '🖥  Screen 3'], ['full', '⊞  Both — all screens at once']].map(([v, label]) => (
+              <Pressable key={v} style={s.screenRow} onPress={() => { setScreenPickOpen(false); fire('view', { text: v }, null, { label: label.replace(/^[^ ]+\s+/, '') }); }}>
+                <Text style={s.screenRowTxt}>{label}</Text>
+              </Pressable>
+            ))}
+            <Pressable style={[s.screenRow, { borderBottomWidth: 0 }]} onPress={() => { setScreenPickOpen(false); fire('view', {}, null, { label: 'Next screen' }); }}>
+              <Text style={[s.screenRowTxt, { color: t.blue }]}>↻  Next screen</Text>
+            </Pressable>
           </Pressable>
         </Pressable>
       </Modal>
@@ -764,8 +783,12 @@ const styles = (t) => {
     typeBarInput: { flex: 1, backgroundColor: t.card, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 10, color: t.label, fontSize: 15, borderWidth: StyleSheet.hairlineWidth, borderColor: t.sep },
     typeBarIcon: { paddingHorizontal: 6, paddingVertical: 6 },
     typeBarIconTxt: { fontSize: 20 },
-    typeBarSend: { backgroundColor: t.blue, borderRadius: 999, paddingHorizontal: 18, paddingVertical: 10 },
+    typeBarSend: { backgroundColor: t.blue, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 10 },
     typeBarSendTxt: { color: '#fff', fontSize: 15, fontWeight: '700' },
+    typeBarGhost: { backgroundColor: t.card, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: t.sep },
+    typeBarGhostTxt: { color: t.label, fontSize: 15, fontWeight: '600' },
+    screenRow: { paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.sep },
+    screenRowTxt: { color: t.label, fontSize: 16, fontWeight: '500' },
     toastOk: { backgroundColor: 'rgba(28,120,56,0.94)' },
     toastBad: { backgroundColor: 'rgba(170,40,32,0.95)' },
     toastTxt: { color: '#fff', fontSize: 13, fontWeight: '600', textAlign: 'center' },
