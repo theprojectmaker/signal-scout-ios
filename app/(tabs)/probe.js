@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { View, Text, Pressable, FlatList, StyleSheet } from 'react-native';
+import { View, Text, Pressable, FlatList, StyleSheet, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -58,7 +58,8 @@ export default function ProbeScreen() {
   const [results, setResults] = useState({});      // id -> { status, ms }
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
-  const [filter, setFilter] = useState('all');     // all | ok | channels | blocked
+  const [filter, setFilter] = useState('all');     // all | ok | channels | suspect | blocked
+  const [q, setQ] = useState('');                  // text search over name / url / category
   const cancelRef = useRef(false);
   const resultsRef = useRef({});
 
@@ -127,6 +128,7 @@ export default function ProbeScreen() {
     else if (filter === 'blocked') list = probes.filter((p) => results[p.id]?.status === 'blocked');
     else if (filter === 'channels') list = probes.filter((p) => p.channel && isReal(p.id));
     else if (filter === 'suspect') list = probes.filter((p) => isSuspect(p.id));
+    if (q) list = list.filter((p) => (p.name && p.name.toLowerCase().includes(q)) || (p.url && p.url.toLowerCase().includes(q)) || (p.cat && p.cat.toLowerCase().includes(q)));
     // genuinely reachable first, channels first within that
     return [...list].sort((a, b) => {
       const ra = isReal(a.id) ? 0 : 1;
@@ -135,7 +137,7 @@ export default function ProbeScreen() {
       if (a.channel !== b.channel) return a.channel ? -1 : 1;
       return 0;
     });
-  }, [probes, results, filter, isReal, isSuspect]);
+  }, [probes, results, filter, isReal, isSuspect, q]);
 
   const copyGreens = useCallback(async () => {
     const real = probes.filter((p) => results[p.id]?.status === 'ok' && !results[p.id]?.suspect);
@@ -223,6 +225,14 @@ export default function ProbeScreen() {
         )}
       </View>
 
+      <TextInput
+        style={s.search}
+        value={q}
+        onChangeText={(v) => setQ(v.toLowerCase().trim())}
+        placeholder="Search endpoints — e.g. blob, azure, pubsub"
+        placeholderTextColor={t.label3}
+        autoCapitalize="none" autoCorrect={false} clearButtonMode="while-editing"
+      />
       <View style={s.filterWrap}>
         {[['all', 'All'], ['ok', 'Reachable'], ['channels', '⭐ Channels'], ['suspect', '⚠ Suspect'], ['blocked', 'Blocked']].map(([k, lbl]) => (
           <Pressable key={k} onPress={() => setFilter(k)} style={[s.chip, filter === k && s.chipOn]}>
@@ -278,6 +288,7 @@ const styles = (t) => StyleSheet.create({
   progFill: { height: 6, backgroundColor: t.blue },
   progText: { fontSize: 12, color: t.label2, width: 72, textAlign: 'right' },
   btnWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingTop: 2, paddingBottom: 4 },
+  search: { marginHorizontal: 16, marginBottom: 8, backgroundColor: t.card, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, color: t.label, fontSize: 15, borderWidth: StyleSheet.hairlineWidth, borderColor: t.sep },
   filterWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingBottom: 10 },
   btn: { backgroundColor: t.card, borderRadius: 10, paddingHorizontal: 16, paddingVertical: 10 },
   btnTxt: { color: t.label, fontSize: 14, fontWeight: '600' },
