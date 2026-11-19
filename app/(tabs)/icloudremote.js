@@ -83,6 +83,8 @@ export default function ICloudRemoteScreen() {
   useEffect(() => { frameRef.current = r.frame; }, [r.frame]);
   useEffect(() => { sendRef.current = r.sendCmd; }, [r.sendCmd]);
   useEffect(() => { dragModeRef.current = dragMode; }, [dragMode]);
+  const webRef = useRef(false);
+  useEffect(() => { webRef.current = mode === 'web'; }, [mode]);   // web mode = touch-browser gestures
   // (auto-connect on open is handled inside the useICloudRemote hook)
 
   // box point → PC pixel, undoing zoom/pan then the letterbox
@@ -232,7 +234,7 @@ export default function ICloudRemoteScreen() {
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: (e) => {
         const ts = e.nativeEvent.touches;
-        g.moved = false; g.tracking = false; g.longFired = false; g.pinch = null; g.multi = false; g.last = null;
+        g.moved = false; g.tracking = false; g.longFired = false; g.pinch = null; g.multi = false; g.last = null; g.webDragged = false;
         if (ts && ts.length >= 2) { startPinch(ts); return; }
         const { locationX: lx, locationY: ly } = e.nativeEvent;
         g.start = { lx, ly };
@@ -246,6 +248,22 @@ export default function ICloudRemoteScreen() {
         const ts = e.nativeEvent.touches;
         if (ts && ts.length >= 2) { if (!g.pinch) startPinch(ts); else updatePinch(ts); return; }
         if (g.multi) return;                       // a pinch just ended — wait for a fresh touch
+        if (webRef.current) {                       // WEB: a drag scrolls the page; a tap (on release) clicks
+          const { locationX: wx, locationY: wy } = e.nativeEvent;
+          if (!g.tracking) {
+            if (Math.abs(gs.dx) < 12 && Math.abs(gs.dy) < 12) return;   // small jitter stays a tap
+            g.tracking = true; g.webDragged = true; clearTimeout(g.longTimer);
+            g.lastDragX = g.start.lx; g.lastDragY = g.start.ly;
+          }
+          const f = frameRef.current; if (!f) return;
+          const scale = Math.min(box.current.w / f.w, box.current.h / f.h) || 1;
+          const dY = wy - g.lastDragY, dX = wx - g.lastDragX;
+          if ((Math.abs(dY) >= 6 || Math.abs(dX) >= 6) && inflight.current <= 3) {
+            g.lastDragX = wx; g.lastDragY = wy;
+            rawSend('wheel', { dy: Math.round(-(dY / scale)), dx: Math.round(-(dX / scale)) });   // natural scroll
+          }
+          return;
+        }
         const { locationX: lx, locationY: ly } = e.nativeEvent;
         if (!g.tracking) {
           if (Math.abs(gs.dx) < 8 && Math.abs(gs.dy) < 8) return;
@@ -285,6 +303,20 @@ export default function ICloudRemoteScreen() {
         clearTimeout(g.longTimer);
         const { locationX: lx, locationY: ly } = e.nativeEvent;
         if (g.multi) { g.pinch = null; g.multi = false; return; }
+        if (webRef.current) {                       // WEB: a drag was a scroll; anything else is a click
+          if (g.longFired) { g.tracking = false; g.webDragged = false; return; }
+          if (g.webDragged || g.tracking) { g.tracking = false; g.webDragged = false; return; }
+          const p = mapPt(g.start.lx, g.start.ly);
+          if (!p) return;
+          setCursor(p);
+          const now = Date.now(), lt = g.lastTap, at = { x: g.start.lx, y: g.start.ly };
+          if (lt && now - lt.t < 320 && Math.hypot(g.start.lx - lt.lx, g.start.ly - lt.ly) < 30) {
+            g.lastTap = null; fire('dblclick', p, at, { label: 'Double-click' });
+          } else {
+            g.lastTap = { t: now, lx: g.start.lx, ly: g.start.ly }; fire('click', p, at);
+          }
+          return;
+        }
         if (g.tracking) {
           const p = (precisionRef.current && g.precPos) ? g.precPos : mapPt(lx, ly);
           if (dragModeRef.current) {
@@ -315,7 +347,7 @@ export default function ICloudRemoteScreen() {
       onPanResponderTerminate: () => {
         clearTimeout(g.longTimer);
         if (g.tracking && dragModeRef.current) rawSend('up', {});
-        g.tracking = false; g.multi = false; g.pinch = null; g.precPos = null; g.precPrev = null;
+        g.tracking = false; g.multi = false; g.pinch = null; g.precPos = null; g.precPrev = null; g.webDragged = false;
       },
     })
   ).current;
