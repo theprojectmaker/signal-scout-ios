@@ -15,6 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const FRAME_CACHE = 'icloud_last_frame_v1';   // the last screen, so a reopen shows it instantly
 import Constants from 'expo-constants';
 import { hasNativeCK, nativePut, nativeGet } from './icloudNative';
+import { createAssembler, ingest, sequence, applyMsg, snapshot, TURBO_SLOTS, turboIdxNames, turboPayName } from './turboAssembler';
 
 const RC = (Constants.expoConfig && Constants.expoConfig.extra && Constants.expoConfig.extra.rc) || {};
 const CFG_KEY = 'icloud_remote_cfg_v1';
@@ -29,6 +30,7 @@ const DEFAULT_CFG = {
   webAuthToken: '',
   tokenManual: false,                     // true only if the user pasted a token in Settings
   packing: false,                         // ON = ask the PC to pack several frames per write (smoother)
+  turboQ: 0,                              // Turbo quality floor: 0 = best the link allows … 4 = smallest/fastest
 };
 
 const ckBase = (cfg, kind, op) => `https://api.apple-cloudkit.com/database/1/${encodeURIComponent(cfg.container)}/${encodeURIComponent(cfg.env || 'development')}/public/${kind}/${op}`;
@@ -92,6 +94,19 @@ async function backendRingFrames(cfg) {
   const resp = await ckPost(cfg, 'lookup', { records: names.map((n) => ({ recordName: n })) });
   return (resp.records || []).map(normWebFrame).filter(Boolean).sort((a, b) => b.ts - a.ts);
 }
+// Look records up by name (native or web) and return plain {name, ts, seq, w, h, jpeg} objects. Used by Turbo,
+// which polls tiny index records and then downloads only the payload records that changed.
+async function backendLookup(cfg, names) {
+  if (hasNativeCK) {
+    const recs = await nativeGet(names);
+    return (recs || []).map((r) => ({ name: r.recordName, ts: Number(r.ts) || 0, seq: Number(r.seq) || 0, w: Number(r.w) || 0, h: Number(r.h) || 0, jpeg: r.jpeg }));
+  }
+  const resp = await ckPost(cfg, 'lookup', { records: names.map((n) => ({ recordName: n })) });
+  return (resp.records || []).filter((rec) => rec && rec.fields).map((rec) => {
+    const v = (k) => (rec.fields[k] ? rec.fields[k].value : undefined);
+    return { name: rec.recordName, ts: Number(v('ts')) || 0, seq: Number(v('seq')) || 0, w: Number(v('w')) || 0, h: Number(v('h')) || 0, jpeg: v('jpeg') };
+  });
+}
 async function backendWriteCmd(cfg, plain) {
   const name = slotName(cfg.room, plain.seq);
   if (hasNativeCK) return nativePut('RCCmd', name, plain);
@@ -108,7 +123,7 @@ export function newRoom() {
   return s;
 }
 
-export function useICloudRemote(activeRoom, enabled = true) {
+export function useICloudRemote(activeRoom, enabled = true, turbo = false) {
   // activeRoom overrides cfg.room (e.g. 'WEB' for the browser tab) without changing the saved desktop room,
   // so Computer and Web are two tabs over the same container/creds — just different mailbox rooms.
   const activeRoomRef = useRef(activeRoom || null);
@@ -128,6 +143,22 @@ export function useICloudRemote(activeRoom, enabled = true) {
   const liveRef = useRef(false);   // have we received at least one frame this session
   const cfgRef = useRef(DEFAULT_CFG);
   const pollFrameRef = useRef(() => {});
+  // ---- Turbo (delta-tile stream) state ----
+  const turboRef = useRef(!!turbo);                       // current mode, read by callbacks
+  const asmRef = useRef(createAssembler());                // orders + paints the bridge's messages
+  const slotTsRef = useRef(new Array(TURBO_SLOTS).fill(0));    // newest payload ts we hold, per slot
+  const slotWantRef = useRef(new Array(TURBO_SLOTS).fill(0)); // newest ts we already asked for (never fetch a slot twice)
+  const playQRef = useRef([]);                             // sequenced messages waiting for their playout moment
+  const lastPlayAtRef = useRef(0);
+  const lastPlayTsRef = useRef(0);
+  const turboTokenRef = useRef(0);                         // bumping it stops the running Turbo loops
+  const fetchBusyRef = useRef(0);
+  const screenSzRef = useRef({ w: 0, h: 0 });              // the PC's real screen size (for tap mapping)
+  const lastResyncRef = useRef(0);
+  const turboErrRef = useRef(0);
+  const tStat = useRef({ commits: 0, bytes: 0, idxMs: [], aliveAt: 0, t0: Date.now() });
+  const [turboView, setTurboView] = useState(null);        // {rev, base, rects, W, H} → drawn by TurboCanvas
+  const [turboInfo, setTurboInfo] = useState({ fps: 0, kbs: 0, rtt: 0, aliveAt: 0 });
 
   // ---- in-app event log (so a failure is diagnosable without a cable) ----
   const logRef = useRef([]);
@@ -174,7 +205,11 @@ export function useICloudRemote(activeRoom, enabled = true) {
     }).catch(() => {});
     const sub = AppState.addEventListener('change', (st) => {
       if (st === 'active') {
-        if (connectedRef.current) { pollFrameRef.current(); const c = cfgRef.current; if (hasNativeCK || c.webAuthToken) sendCmdRef.current('shot'); }
+        if (connectedRef.current) {
+          const c = cfgRef.current;
+          if (turboRef.current) { if (hasNativeCK || c.webAuthToken) { sendCmdRef.current('turbo', { text: 'on' }); sendCmdRef.current('tr'); } }   // back from the background: repaint from a fresh preview
+          else { pollFrameRef.current(); if (hasNativeCK || c.webAuthToken) sendCmdRef.current('shot'); }
+        }
       } else if (lastFrameObjRef.current) {
         persistFrame(lastFrameObjRef.current, true);   // save the last screen right before we're suspended
       }
@@ -237,6 +272,132 @@ export function useICloudRemote(activeRoom, enabled = true) {
     } catch (e) { fail(e.message || e); }
   }, [fail]);
 
+  // ===================== TURBO: delta-tile stream =====================
+  // The PC sends only the screen rectangles that changed (full resolution) plus a small whole-screen preview
+  // during big motion, packed into a ring of payload records, each with a TINY index record beside it. So:
+  //   index loop  — every ~240ms look up the tiny indexes (cheap even when nothing changes);
+  //   fetch       — when an index shows a newer payload, download JUST that payload (in parallel, not blocking
+  //                 the index loop);  assemble — order/dedupe/repair gaps (turboAssembler);
+  //   playout     — apply messages at their capture cadence (bursts look like motion, not a jump).
+  const turboReset = useCallback(() => {
+    asmRef.current = createAssembler();
+    slotTsRef.current = new Array(TURBO_SLOTS).fill(0);
+    slotWantRef.current = new Array(TURBO_SLOTS).fill(0);
+    playQRef.current = []; lastPlayAtRef.current = 0; lastPlayTsRef.current = 0;
+    setTurboView(null);
+  }, []);
+
+  const requestResync = useCallback((why) => {
+    const now = Date.now();
+    if (now - lastResyncRef.current < 3000) return;          // at most one repaint request per 3s
+    lastResyncRef.current = now;
+    pushLog('info', 'turbo: repaint requested (' + why + ')');
+    sendCmdRef.current('tr');
+  }, [pushLog]);
+
+  const turboSequence = useCallback(() => {
+    const { ready, resync } = sequence(asmRef.current, Date.now());
+    if (ready.length) playQRef.current.push(...ready);
+    if (resync) requestResync('gap');
+  }, [requestResync]);
+
+  const turboFetch = useCallback(async (cfg, want) => {
+    fetchBusyRef.current++;
+    try {
+      const recs = await backendLookup(cfg, want.map((w) => turboPayName(cfg.room, w.k)));
+      for (const r of recs) {
+        const k = Number(r.name.slice(r.name.lastIndexOf('-p') + 2));
+        const w = want.find((x) => x.k === k);
+        if (!w || r.ts < w.ts || typeof r.jpeg !== 'string') continue;   // payload older than its index → asked again next poll
+        slotTsRef.current[k] = r.ts;
+        tStat.current.bytes += r.jpeg.length;
+        let arr = []; try { arr = JSON.parse(r.jpeg); } catch (e) { /* torn record: the gap logic repairs it */ }
+        ingest(asmRef.current, arr);
+      }
+      for (const w of want) if (slotTsRef.current[w.k] < w.ts) slotWantRef.current[w.k] = slotTsRef.current[w.k];   // not obtained → allow a retry
+      turboSequence();
+      turboErrRef.current = 0;
+    } catch (e) {
+      for (const w of want) slotWantRef.current[w.k] = slotTsRef.current[w.k];
+      turboErrRef.current++;
+      if (turboErrRef.current >= 3) fail(e.message || e);
+    } finally { fetchBusyRef.current--; }
+  }, [fail, turboSequence]);
+
+  const turboIndexOnce = useCallback(async () => {
+    const cfg = { ...cfgRef.current, room: activeRoomRef.current || cfgRef.current.room };
+    if (!cfg.container || !cfg.room || (!hasNativeCK && !cfg.token)) return;
+    const t0 = Date.now();
+    const idx = await backendLookup(cfg, turboIdxNames(cfg.room));
+    const ms = tStat.current.idxMs; ms.push(Date.now() - t0); if (ms.length > 8) ms.shift();
+    tStat.current.aliveAt = Date.now();
+    turboErrRef.current = 0;
+    let ack = lastAckRef.current; const want = [];
+    for (const r of idx) {
+      const k = Number(r.name.slice(r.name.lastIndexOf('-i') + 2));
+      if (!(k >= 0 && k < TURBO_SLOTS)) continue;
+      if (r.w && r.h) screenSzRef.current = { w: r.w, h: r.h };
+      if (r.seq < 0 && -r.seq > ack) ack = -r.seq;                       // delivery receipt rides the index (tiny)
+      if (r.ts > slotTsRef.current[k] && r.ts > slotWantRef.current[k]) want.push({ k, ts: r.ts });
+    }
+    if (want.length && fetchBusyRef.current < 2) {
+      for (const w of want) slotWantRef.current[w.k] = w.ts;
+      turboFetch(cfg, want);                                              // not awaited: indexes keep ticking meanwhile
+    }
+    if (ack !== lastAckRef.current) { lastAckRef.current = ack; setFrame((f) => (f ? { ...f, ack } : f)); }
+    turboSequence();                                                      // a gap may have timed out even with nothing new
+    setStatus('connected');
+  }, [turboFetch, turboSequence]);
+
+  const startTurbo = useCallback(() => {
+    const token = ++turboTokenRef.current;
+    const alive = () => turboTokenRef.current === token;
+    (async () => {                                                        // index loop
+      while (alive()) {
+        const t0 = Date.now();
+        try { await turboIndexOnce(); }
+        catch (e) { turboErrRef.current++; if (turboErrRef.current >= 3) fail(e.message || e); }
+        await new Promise((res) => setTimeout(res, Math.max(70, 240 - (Date.now() - t0))));
+      }
+    })();
+    const play = () => {                                                  // playout loop
+      if (!alive()) return;
+      const q = playQRef.current, now = Date.now();
+      let changed = false, lastTs = 0;
+      if (q.length > 14) { let last = -1; for (let i = 0; i < q.length; i++) if (q[i].t === 'b') last = i; if (last > 0) q.splice(0, last); }   // far behind → jump to the newest preview
+      while (q.length) {
+        const m = q[0];
+        let gap = lastPlayTsRef.current ? Math.min(120, Math.max(0, m.ts - lastPlayTsRef.current)) : 0;   // replay the capture cadence (≤120ms)
+        if (q.length > 12) gap = 0; else if (q.length > 6) gap *= 0.4;                                      // catching up → faster
+        if (now - lastPlayAtRef.current < gap) break;
+        q.shift();
+        if (applyMsg(asmRef.current, m)) changed = true;
+        if (m.ts !== lastPlayTsRef.current) lastPlayAtRef.current = now;
+        lastPlayTsRef.current = m.ts; lastTs = m.ts;
+      }
+      if (changed) {
+        const snap = snapshot(asmRef.current), sz = screenSzRef.current;
+        setTurboView(snap);
+        const f = { jpeg: '', w: sz.w || snap.W, h: sz.h || snap.H, ts: lastTs, ack: lastAckRef.current, rxAt: Date.now(), kb: 0, turbo: true };
+        lastFrameObjRef.current = f;
+        setFrame(f);
+        tStat.current.commits++;
+        if (!liveRef.current) { liveRef.current = true; pushLog('ok', `turbo screen is live (${snap.W}×${snap.H}, ${hasNativeCK ? 'native' : 'web'})`); }
+      }
+      setTimeout(play, 16);
+    };
+    play();
+    const hud = () => {                                                   // 1s numbers for the status bar
+      if (!alive()) return;
+      const s = tStat.current, dt = Math.max(0.5, (Date.now() - s.t0) / 1000), ms = s.idxMs.slice().sort((a, b) => a - b);
+      setTurboInfo({ fps: Math.round(s.commits / dt), kbs: Math.round(s.bytes / 1024 / dt), rtt: ms.length ? ms[ms.length >> 1] : 0, aliveAt: s.aliveAt });
+      s.commits = 0; s.bytes = 0; s.t0 = Date.now();
+      setTimeout(hud, 1000);
+    };
+    hud();
+  }, [turboIndexOnce, fail, pushLog]);
+  const stopTurbo = useCallback(() => { turboTokenRef.current++; }, []);
+
   useEffect(() => { pollFrameRef.current = pollFrame; }, [pollFrame]);
   useEffect(() => { connectedRef.current = connected; }, [connected]);
 
@@ -288,7 +449,7 @@ export function useICloudRemote(activeRoom, enabled = true) {
   }, [setCfg, pushLog]);
 
   const sendCmd = useCallback(async (kind, extra = {}) => {
-    const cfg = { ...cfgRef.current, room: activeRoomRef.current || cfgRef.current.room };
+    const cfg = { ...cfgRef.current, room: extra.room || activeRoomRef.current || cfgRef.current.room };   // extra.room: address a specific bridge
     if (!cfg.container || !cfg.room || (!hasNativeCK && !cfg.token)) {
       setStatus('Set up iCloud first');
       return { ok: false, seq: 0, error: 'Set up iCloud first' };
@@ -317,15 +478,25 @@ export function useICloudRemote(activeRoom, enabled = true) {
   const connect = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current);
     if (keepRef.current) clearInterval(keepRef.current);
+    stopTurbo();
     liveRef.current = false;
     bufRef.current = []; lastTsRef.current = 0; lastAckRef.current = 0;   // fresh buffer each connect
+    turboReset();
     const c = { ...cfgRef.current, room: activeRoomRef.current || cfgRef.current.room };
     setConnected(true); setStatus('connecting…');
-    pushLog('info', `connecting · ${hasNativeCK ? 'native' : 'web'} · env ${c.env} · room ${c.room}`);
-    pollFrame();
-    sendCmd('shot');
-    sendCmd('pack', { text: c.packing ? 'on' : 'off' });   // restore the frame-packing preference on the PC
-    pollRef.current = setInterval(pollFrame, 700);   // one lookup of the whole ring per tick (don't flood)
+    pushLog('info', `connecting · ${turboRef.current ? 'TURBO · ' : ''}${hasNativeCK ? 'native' : 'web'} · env ${c.env} · room ${c.room}`);
+    if (turboRef.current) {
+      sendCmd('turbo', { text: 'on' });                        // ask the PC for the delta-tile engine
+      sendCmd('tq', { text: String(c.turboQ || 0) });
+      sendCmd('tr');                                           // …and a fresh whole-screen preview to start from
+      startTurbo();
+    } else {
+      pollFrame();
+      sendCmd('shot');
+      if (c.room !== 'WEB') sendCmd('turbo', { text: 'off' });  // a bridge left in Turbo goes back to the classic ring
+      sendCmd('pack', { text: c.packing ? 'on' : 'off' });   // restore the frame-packing preference on the PC
+      pollRef.current = setInterval(pollFrame, 700);   // one lookup of the whole ring per tick (don't flood)
+    }
     lastKeepRef.current = Date.now();
     // Freshness watchdog + keepalive. Runs often and nudges the PC bridge with a 'shot' when the picture
     // has gone stale (so the age never silently climbs to "100s ago" — if frames stop, we actively ask
@@ -334,6 +505,10 @@ export function useICloudRemote(activeRoom, enabled = true) {
     keepRef.current = setInterval(() => {
       const c = cfgRef.current;
       if (!(hasNativeCK || c.webAuthToken)) return;
+      if (turboRef.current) {                                   // Turbo is silent on a still screen — only keep the PC's "viewer active" flag warm
+        if (Date.now() - lastKeepRef.current > 14000) { lastKeepRef.current = Date.now(); sendCmd('shot'); }
+        return;
+      }
       const fr = lastFrameObjRef.current;
       const age = fr && fr.rxAt ? Date.now() - fr.rxAt : Infinity;   // Infinity before the first live frame
       if (age > 2500 || Date.now() - lastKeepRef.current > 16000) {
@@ -341,13 +516,14 @@ export function useICloudRemote(activeRoom, enabled = true) {
         sendCmd('shot');
       }
     }, 1500);
-  }, [pollFrame, sendCmd, pushLog]);
+  }, [pollFrame, sendCmd, pushLog, stopTurbo, startTurbo, turboReset]);
 
   const disconnect = useCallback(() => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     if (keepRef.current) { clearInterval(keepRef.current); keepRef.current = null; }
+    stopTurbo();
     setConnected(false); setStatus(''); pushLog('info', 'disconnected');
-  }, [pushLog]);
+  }, [pushLog, stopTurbo]);
 
   // auto-connect on open when pre-configured AND this transport is active (enabled). When the user
   // switches to another transport (e.g. the Azure tab) this hook is disabled, so it disconnects and
@@ -371,14 +547,41 @@ export function useICloudRemote(activeRoom, enabled = true) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRoom]);
 
+  // Computer <-> Turbo on a live connection: swap the reader without dropping the link. (Declared AFTER the room
+  // effect above so activeRoomRef is already current when commands go out.)
+  useEffect(() => {
+    const was = turboRef.current, now = !!turbo;
+    turboRef.current = now;
+    if (was === now || !connectedRef.current) return;
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    stopTurbo(); turboReset();
+    bufRef.current = []; lastTsRef.current = 0; liveRef.current = false;
+    setFrame(null); setStatus('switching…');
+    if (now) {
+      sendCmdRef.current('turbo', { text: 'on' });
+      sendCmdRef.current('tq', { text: String(cfgRef.current.turboQ || 0) });
+      sendCmdRef.current('tr');
+      startTurbo();
+    } else {
+      sendCmdRef.current('turbo', { text: 'off', room: cfgRef.current.room });   // always to the PC's room, even if we're heading to the Web tab
+      if ((activeRoomRef.current || cfgRef.current.room) !== 'WEB') pollFrameRef.current();
+      sendCmdRef.current('shot');
+      pollRef.current = setInterval(() => pollFrameRef.current(), 700);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turbo]);
+
   useEffect(() => () => {
     if (pollRef.current) clearInterval(pollRef.current);
     if (keepRef.current) clearInterval(keepRef.current);
+    turboTokenRef.current++;
   }, []);
 
   return {
     cfg, loaded, connected, status, frame, authUrl,
     native: hasNativeCK, signedIn: hasNativeCK || !!cfg.webAuthToken,
+    turbo: !!turbo, turboView, turboInfo,
+    repaint: () => sendCmd('tr'),
     setCfg, connect, disconnect, sendCmd, requestShot: () => sendCmd('shot'),
     beginSignIn, completeSignIn,
     log, clearLog, pushLog,

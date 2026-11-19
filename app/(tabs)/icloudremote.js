@@ -11,7 +11,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as Updates from 'expo-updates';
 import { useTheme } from '../../components/theme';
 import { useICloudRemote, newRoom } from '../../components/icloudClient';
-import { useAzureRemote } from '../../components/azureClient';
+import TurboCanvas from '../../components/TurboCanvas';
 
 // Captures the ckWebAuthToken whether CloudKit returns it in the URL or via postMessage.
 const CAPTURE_JS = `(function(){
@@ -32,6 +32,7 @@ const KEY_GROUPS = [
 ];
 const NAMES = { click: 'Click', dblclick: 'Double-click', rightclick: 'Right-click', move: 'Move', up: 'Drag', wheel: 'Scroll', type: 'Typing', key: 'Key', shot: 'Refresh', quality: 'Quality' };
 const PIC_LABEL = { fast: 'Fast (fastest)', clear: 'Clear (sharper)', text: 'Text (crisp code)' };
+const TQ_LABEL = { 0: 'Best (adapts to the link)', 2: 'Smooth (smaller, steadier)', 4: 'Fastest (smallest)' };
 const MARK_COLOR = { sending: '#0A84FF', sent: '#FF9F0A', unconfirmed: '#FF9F0A', done: '#30D158', failed: '#FF453B', timeout: '#FF453B' };
 const shortErr = (s) => String(s || '').replace(/^CloudKit \d+:\s*/, '').slice(0, 70);
 const MAX_ZOOM = 6;
@@ -41,13 +42,12 @@ export default function ICloudRemoteScreen() {
   const s = styles(t);
   const insets = useSafeAreaInsets();
   const { height: winH } = useWindowDimensions();
-  const [mode, setMode] = useState('computer');   // 'computer' = your PC · 'web' = the iCloud web browser (room WEB)
-  // Three transports share this one screen so you can A/B their speed by tapping the toggle:
-  // Computer & Web ride CloudKit (different rooms); Azure rides Azure Blob Storage. Both hooks are
-  // always mounted (React rule), but only the active one is enabled, so the other stops polling.
-  const icloudR = useICloudRemote(mode === 'web' ? 'WEB' : null, mode !== 'azure');
-  const azureR = useAzureRemote(mode === 'azure');
-  const r = mode === 'azure' ? azureR : icloudR;
+  const [mode, setMode] = useState('computer');   // 'computer' = your PC (classic) · 'turbo' = your PC (delta-tile engine, beta) · 'web' = the iCloud web browser (room WEB)
+  // All three ride CloudKit. Computer and Turbo are the SAME room (your PC) read two different ways; Web is the
+  // browser agent's room. Switching Computer <-> Turbo keeps the connection and just swaps the reader.
+  const r = useICloudRemote(mode === 'web' ? 'WEB' : null, true, mode === 'turbo');
+  const isTurbo = mode === 'turbo';
+  const [boxDim, setBoxDim] = useState({ w: 0, h: 0 });   // layout size as STATE so rotating the iPad redraws the Turbo canvas
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [kbOpen, setKbOpen] = useState(false);
@@ -371,14 +371,16 @@ export default function ICloudRemoteScreen() {
     return { x: cx + off.x + zoom * (ix - cx), y: cy + off.y + zoom * (iy - cy) };
   })();
 
-  const needsSetup = mode === 'azure'
-    ? (!r.cfg.base || !r.cfg.sas || !r.cfg.room)
-    : (!r.cfg.container || !r.cfg.room || (!r.native && !r.cfg.token));
+  const needsSetup = !r.cfg.container || !r.cfg.room || (!r.native && !r.cfg.token);
   const errish = /error|fail|401|403|AUTHENTICATION|unauthenticated|CloudKit \d/i.test(r.status || '');
   // A cached frame (shown instantly on reopen, before the stream resumes) isn't "stale" — it's the
   // last screen while we reconnect. Only live frames get an age / stale check.
-  const cachedOnly = !!(r.frame && r.frame.cached);
-  const frameAgeS = r.frame && !cachedOnly ? Math.max(0, Math.round((Date.now() - (r.frame.rxAt || r.frame.ts)) / 1000)) : null;
+  const turboLive = isTurbo && !!(r.turboView && r.turboView.base);
+  const cachedOnly = !!(r.frame && r.frame.cached) && !turboLive;
+  // Turbo is silent while the screen is still, so "age" there means "how long since the PC's index last answered".
+  const frameAgeS = isTurbo
+    ? (turboLive && r.turboInfo.aliveAt ? Math.max(0, Math.round((Date.now() - r.turboInfo.aliveAt) / 1000)) : null)
+    : (r.frame && !cachedOnly ? Math.max(0, Math.round((Date.now() - (r.frame.rxAt || r.frame.ts)) / 1000)) : null);
   const stale = frameAgeS != null && frameAgeS > 40;
   const live = r.connected && !!r.frame && !errish && !stale;
   const dotColor = errish ? t.red : live ? t.green : r.connected ? '#FF9F0A' : t.label3;
@@ -390,9 +392,11 @@ export default function ICloudRemoteScreen() {
     setTyped('');
   };
 
-  const title = mode === 'web' ? 'Web browser' : mode === 'azure' ? 'Azure Remote' : (r.native ? 'iCloud Remote' : 'iCloud Remote · web');
+  const title = mode === 'web' ? 'Web browser' : isTurbo ? 'Turbo β' : (r.native ? 'iCloud Remote' : 'iCloud Remote · web');
   const sub = cachedOnly
     ? (r.connected ? 'reconnecting…' : 'tap to resume')
+    : (isTurbo && turboLive)
+    ? (stale ? `no link for ${frameAgeS}s — check the PC bridge` : `Live · ${r.turboInfo.fps} fps · ${r.turboInfo.kbs} KB/s`)
     : r.frame
     ? (stale ? `frozen ${frameAgeS}s — check the PC bridge` : (frameAgeS <= 2 ? (fps >= 2 ? `Live · ${fps} fps` : 'Live') : `Live · ${frameAgeS}s`))
     : r.connected ? (errish ? 'can’t reach CloudKit' : 'waiting for your PC…') : 'not connected';
@@ -410,7 +414,7 @@ export default function ICloudRemoteScreen() {
       </View>
 
       <View style={s.tabRow}>
-        {[['computer', '🖥  Computer'], ['web', '🌐  Web'], ['azure', '⚡  Azure']].map(([m, label]) => (
+        {[['computer', '🖥  Computer'], ['turbo', '⚡  Turbo β'], ['web', '🌐  Web']].map(([m, label]) => (
           <Pressable key={m} onPress={() => setMode(m)} style={[s.tabBtn, mode === m && s.tabBtnOn]}>
             <Text style={[s.tabTxt, mode === m && s.tabTxtOn]} numberOfLines={1}>{label}</Text>
           </Pressable>
@@ -419,10 +423,14 @@ export default function ICloudRemoteScreen() {
 
       <View
         style={s.screenWrap}
-        onLayout={(e) => { box.current = { w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height }; }}
+        onLayout={(e) => { const w = e.nativeEvent.layout.width, h = e.nativeEvent.layout.height; box.current = { w, h }; setBoxDim({ w, h }); }}
         {...pan.panHandlers}
       >
-        {r.frame ? (
+        {turboLive ? (
+          <View style={[StyleSheet.absoluteFill, { transform: [{ translateX: off.x }, { translateY: off.y }, { scale: zoom }] }]} pointerEvents="none">
+            <TurboCanvas view={r.turboView} boxW={boxDim.w} boxH={boxDim.h} />
+          </View>
+        ) : r.frame && r.frame.jpeg ? (
           <View style={StyleSheet.absoluteFill} pointerEvents="none">
             <Image
               source={{ uri: `data:image/jpeg;base64,${r.frame.jpeg}` }}
@@ -442,16 +450,16 @@ export default function ICloudRemoteScreen() {
         ) : (
           <View style={s.center}>
             {!errish && <ActivityIndicator color="#8a8a8a" />}
-            <Text style={s.emptyTitle}>{errish ? (mode === 'azure' ? 'Can’t reach Azure' : 'Can’t reach CloudKit') : 'Waiting for your PC…'}</Text>
+            <Text style={s.emptyTitle}>{errish ? 'Can’t reach CloudKit' : 'Waiting for your PC…'}</Text>
             {errish ? (
               <Text style={s.emptyErr}>{r.status}</Text>
             ) : (
               <>
-                <Text style={s.emptyHint}>{mode === 'web' ? 'No page yet. On your PC, the web browser agent should be running:' : mode === 'azure' ? 'No frame yet. On your PC, run the Remote agent, then:' : 'No screenshot yet. On your PC, make sure the Remote agent is running, then run:'}</Text>
-                <Text style={s.emptyCode}>node {mode === 'web' ? 'browser-agent.js' : mode === 'azure' ? 'azure-agent.js' : 'icloud-agent.js'}</Text>
+                <Text style={s.emptyHint}>{mode === 'web' ? 'No page yet. On your PC, the web browser agent should be running:' : isTurbo ? 'Turbo is asking your PC for a fresh picture. If nothing appears in a few seconds, make sure the bridge is running (and up to date):' : 'No screenshot yet. On your PC, make sure the Remote agent is running, then run:'}</Text>
+                <Text style={s.emptyCode}>node {mode === 'web' ? 'browser-agent.js' : 'icloud-agent.js'}</Text>
               </>
             )}
-            <Text style={s.emptyMeta}>{mode === 'azure' ? `azure blob · room ${r.cfg.room || '—'}` : `${r.native ? 'native' : 'web'} · env ${r.cfg.env} · room ${mode === 'web' ? 'WEB' : (r.cfg.room || '—')}`}</Text>
+            <Text style={s.emptyMeta}>{`${r.native ? 'native' : 'web'} · env ${r.cfg.env} · room ${mode === 'web' ? 'WEB' : (r.cfg.room || '—')}`}</Text>
             {!r.native ? (
               <Text style={s.emptyWarn}>
                 This version signs in through Apple’s web login, whose token expires every few minutes, so it can’t be kept reliable.
@@ -510,7 +518,9 @@ export default function ICloudRemoteScreen() {
         {mode !== 'web' ? (
           <>
             <DockBtn s={s} glyph="🖥" label="Screens" onPress={() => setScreenPickOpen(true)} />
-            <DockBtn s={s} glyph="📖" label="HD" onPress={() => fire('hd', {}, null, { label: 'HD boost' })} />
+            {isTurbo
+              ? <DockBtn s={s} glyph="◈" label="Repaint" onPress={() => fire('tr', {}, null, { label: 'Repaint' })} />
+              : <DockBtn s={s} glyph="📖" label="HD" onPress={() => fire('hd', {}, null, { label: 'HD boost' })} />}
           </>
         ) : null}
         <DockBtn s={s} glyph="?" label="Gestures" onPress={() => showToast(mode === 'web' ? 'Tap the blue bar to type a URL · tap links · scroll with ▲▼ or a drag · pinch to zoom' : 'Move = mouse · tap = click · double-tap = double-click · hold = right-click · pinch = zoom · 2 fingers = pan', 'wait')} />
@@ -541,11 +551,16 @@ export default function ICloudRemoteScreen() {
         <Pressable style={s.menuBackdrop} onPress={() => setMenuOpen(false)}>
           <View style={[s.menuCard, { top: insets.top + 44, maxHeight: winH - insets.top - 110 }]}>
             <ScrollView bounces={false}>
-              <MenuItem s={s} label="Refresh now" onPress={doMenu(() => fire('shot', {}, null, { label: 'Refresh' }))} />
+              <MenuItem s={s} label={isTurbo ? 'Repaint screen' : 'Refresh now'} onPress={doMenu(() => (isTurbo ? fire('tr', {}, null, { label: 'Repaint' }) : fire('shot', {}, null, { label: 'Refresh' })))} />
               <MenuItem s={s} label="Type text…" onPress={doMenu(() => setKbOpen(true))} />
               {zoom > 1.01 ? <MenuItem s={s} label="Reset zoom" onPress={doMenu(() => applyZP(1, 0, 0))} /> : null}
-              <MenuItem s={s} label={`Picture: ${PIC_LABEL[picMode]}`} accent={picMode !== 'fast'}
-                onPress={doMenu(() => { const order = ['fast', 'clear', 'text']; const n = order[(order.indexOf(picMode) + 1) % 3]; setPicMode(n); fire('quality', { text: n }, null, { label: `Picture: ${PIC_LABEL[n]}` }); })} />
+              {isTurbo ? (
+                <MenuItem s={s} label={`Turbo quality: ${TQ_LABEL[r.cfg.turboQ || 0]}`} accent
+                  onPress={doMenu(() => { const order = [0, 2, 4]; const n = order[(order.indexOf(r.cfg.turboQ || 0) + 1) % 3]; r.setCfg({ turboQ: n }); fire('tq', { text: String(n) }, null, { label: `Quality: ${TQ_LABEL[n]}` }); })} />
+              ) : (
+                <MenuItem s={s} label={`Picture: ${PIC_LABEL[picMode]}`} accent={picMode !== 'fast'}
+                  onPress={doMenu(() => { const order = ['fast', 'clear', 'text']; const n = order[(order.indexOf(picMode) + 1) % 3]; setPicMode(n); fire('quality', { text: n }, null, { label: `Picture: ${PIC_LABEL[n]}` }); })} />
+              )}
               {mode === 'computer' ? (
                 <MenuItem s={s} label={`Frame packing: ${r.cfg.packing ? 'ON · smoother' : 'off'}`} accent={!!r.cfg.packing}
                   onPress={doMenu(() => { const on = !r.cfg.packing; r.setCfg({ packing: on }); fire('pack', { text: on ? 'on' : 'off' }, null, { label: on ? 'Frame packing on' : 'Frame packing off' }); })} />
@@ -622,38 +637,25 @@ export default function ICloudRemoteScreen() {
           <View style={[s.sheet, { maxHeight: '85%' }]}>
             <View style={s.sheetHead}><Text style={s.sheetTitle}>Settings</Text><Pressable onPress={() => setSetupOpen(false)} hitSlop={8}><Text style={s.sheetDone}>Done</Text></Pressable></View>
             <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 10 }}>
-              {mode === 'azure' ? (
-                <>
-                  <Field s={s} label="Azure blob container URL" value={r.cfg.base} onChange={(v) => r.setCfg({ base: v.trim().replace(/\/$/, '') })} placeholder="https://acct.blob.core.windows.net/remote" />
-                  <Field s={s} label="SAS token" value={r.cfg.sas} onChange={(v) => r.setCfg({ sas: v.trim() })} placeholder="?sv=…&sp=racwl&sig=…" />
-                </>
-              ) : (
-                <>
-                  <Field s={s} label="CloudKit container" value={r.cfg.container} onChange={(v) => r.setCfg({ container: v.trim() })} placeholder="iCloud.com.solyapps.signalscout" />
-                  {!r.native ? <Field s={s} label="API token (web path)" value={r.cfg.token} onChange={(v) => r.setCfg({ token: v.trim(), tokenManual: !!v.trim() })} placeholder="paste the ckAPIToken" /> : null}
-                </>
-              )}
+              <Field s={s} label="CloudKit container" value={r.cfg.container} onChange={(v) => r.setCfg({ container: v.trim() })} placeholder="iCloud.com.solyapps.signalscout" />
+              {!r.native ? <Field s={s} label="API token (web path)" value={r.cfg.token} onChange={(v) => r.setCfg({ token: v.trim(), tokenManual: !!v.trim() })} placeholder="paste the ckAPIToken" /> : null}
               <View style={s.roomRow}>
                 <View style={s.flex}><Field s={s} label="Room code (must match the PC)" value={r.cfg.room} onChange={(v) => r.setCfg({ room: v.trim().toUpperCase() })} placeholder="SOLYPC" /></View>
                 <Pressable onPress={() => r.setCfg({ room: newRoom() })} style={s.genBtn}><Text style={s.genTxt}>New</Text></Pressable>
               </View>
-              {mode !== 'azure' ? (
-                <View style={{ gap: 6 }}>
-                  <Text style={s.fieldLabel}>Environment (must match the PC)</Text>
-                  <View style={s.envBtns}>
-                    {['development', 'production'].map((ev) => (
-                      <Pressable key={ev} onPress={() => r.setCfg({ env: ev })} style={[s.envBtn, r.cfg.env === ev && s.envBtnOn]}>
-                        <Text style={[s.envTxt, r.cfg.env === ev && s.envTxtOn]}>{ev === 'development' ? 'Development' : 'Production'}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
+              <View style={{ gap: 6 }}>
+                <Text style={s.fieldLabel}>Environment (must match the PC)</Text>
+                <View style={s.envBtns}>
+                  {['development', 'production'].map((ev) => (
+                    <Pressable key={ev} onPress={() => r.setCfg({ env: ev })} style={[s.envBtn, r.cfg.env === ev && s.envBtnOn]}>
+                      <Text style={[s.envTxt, r.cfg.env === ev && s.envTxtOn]}>{ev === 'development' ? 'Development' : 'Production'}</Text>
+                    </Pressable>
+                  ))}
                 </View>
-              ) : null}
+              </View>
               <Text style={s.fieldHint}>
-                {mode === 'azure'
-                  ? 'Experimental: relays over Azure Blob Storage to test if it is reachable + faster than iCloud. Needs an Azure storage account + a container SAS (read/write/create), and Azure must be reachable on your network. Run azure-agent.js on your PC.'
-                  : (r.native ? 'Using native iCloud (your device account — no token or sign-in).' : 'Using web iCloud — sending taps needs a one-time Apple sign-in.')}
-                {mode !== 'azure' ? '\nRun icloud-agent.js on your PC with the same room and environment.' : ''}
+                {(r.native ? 'Using native iCloud (your device account — no token or sign-in).' : 'Using web iCloud — sending taps needs a one-time Apple sign-in.')}
+                {'\nRun icloud-agent.js on your PC with the same room and environment.'}
               </Text>
               <View style={{ gap: 6, marginTop: 6 }}>
                 <Text style={s.fieldLabel}>
