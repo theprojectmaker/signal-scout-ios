@@ -107,7 +107,7 @@ export function newRoom() {
   return s;
 }
 
-export function useICloudRemote(activeRoom) {
+export function useICloudRemote(activeRoom, enabled = true) {
   // activeRoom overrides cfg.room (e.g. 'WEB' for the browser tab) without changing the saved desktop room,
   // so Computer and Web are two tabs over the same container/creds — just different mailbox rooms.
   const activeRoomRef = useRef(activeRoom || null);
@@ -338,13 +338,17 @@ export function useICloudRemote(activeRoom) {
     setConnected(false); setStatus(''); pushLog('info', 'disconnected');
   }, [pushLog]);
 
-  // auto-connect on open when pre-configured
+  // auto-connect on open when pre-configured AND this transport is active (enabled). When the user
+  // switches to another transport (e.g. the Azure tab) this hook is disabled, so it disconnects and
+  // stops polling CloudKit in the background.
   useEffect(() => {
-    if (!loaded || connected) return;
+    if (!loaded) return;
+    if (!enabled) { if (connectedRef.current) disconnect(); return; }
+    if (connectedRef.current) return;
     const c = cfgRef.current;
     if (c.container && c.room && (hasNativeCK || c.token)) connect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded]);
+  }, [loaded, enabled]);
 
   // switch tabs (Computer <-> Web): point at the new room and refresh, without tearing the connection down
   useEffect(() => {
