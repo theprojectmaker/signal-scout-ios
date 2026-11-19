@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "Signal Scout",
+    "name": "Slipstream",
     "slug": "signal-scout",
     "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "signalscout",
     "userInterfaceStyle": "automatic",
-    "backgroundColor": "#0b0f17",
+    "backgroundColor": "#0B1222",
     "ios": {
       "bundleIdentifier": "com.solyapps.signalscout",
       "supportsTablet": true,
@@ -22,7 +22,7 @@
     "android": {
       "package": "com.solyapps.signalscout",
       "adaptiveIcon": {
-        "backgroundColor": "#0b0f17",
+        "backgroundColor": "#2456FF",
         "foregroundImage": "./assets/images/adaptive-icon.png"
       },
       "permissions": []
@@ -36,7 +36,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#0b0f17",
+          "backgroundColor": "#0B1222",
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 140
         }
@@ -45,7 +45,7 @@
         "expo-notifications",
         {
           "icon": "./assets/images/notification-icon.png",
-          "color": "#34C759"
+          "color": "#2456FF"
         }
       ],
       "expo-status-bar",

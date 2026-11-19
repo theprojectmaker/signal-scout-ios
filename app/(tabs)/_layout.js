@@ -2,8 +2,10 @@ import { Tabs } from 'expo-router';
 import { useColorScheme } from 'react-native';
 import Svg, { Rect, Path, Circle } from 'react-native-svg';
 
-// Signal Scout is a personal tool: a signal detector + remote control (PC remote, web-over-iCloud
-// browser, and the reachability lab). The AI / notes / photos / tools live in the Aria app instead.
+// A personal remote-desktop tool: control the home PC from any network (even a locked Apple-only
+// Wi-Fi) over iCloud, plus a web-over-iCloud browser, a signal detector, and the reachability lab.
+// Remote desktop is the hero — it's the landing tab. (AI / notes / photos live in the Aria app.)
+export const unstable_settings = { initialRouteName: 'icloudremote' };
 
 function ScoutIcon({ color }) {
   return (
@@ -57,8 +59,8 @@ export default function TabsLayout() {
         tabBarLabelStyle: { fontSize: 11, fontWeight: '500' },
       }}
     >
-      <Tabs.Screen name="index" options={{ title: 'Scout', tabBarIcon: ({ color }) => <ScoutIcon color={color} /> }} />
       <Tabs.Screen name="icloudremote" options={{ title: 'Remote', tabBarIcon: ({ color }) => <RemoteIcon color={color} /> }} />
+      <Tabs.Screen name="index" options={{ title: 'Scout', tabBarIcon: ({ color }) => <ScoutIcon color={color} /> }} />
       <Tabs.Screen name="browser" options={{ title: 'Web', tabBarIcon: ({ color }) => <BrowserIcon color={color} /> }} />
       <Tabs.Screen name="probe" options={{ title: 'Lab', tabBarIcon: ({ color }) => <LabIcon color={color} /> }} />
       {/* Live Remote (normal-Wi-Fi backup) — reached from the Remote tab's ••• menu, hidden from the bar */}
