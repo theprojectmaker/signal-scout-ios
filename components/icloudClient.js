@@ -28,6 +28,7 @@ const DEFAULT_CFG = {
   room: RC.room || 'SOLYPC',              // not secret — pairing room default
   webAuthToken: '',
   tokenManual: false,                     // true only if the user pasted a token in Settings
+  packing: false,                         // ON = ask the PC to pack several frames per write (smoother)
 };
 
 const ckBase = (cfg, kind, op) => `https://api.apple-cloudkit.com/database/1/${encodeURIComponent(cfg.container)}/${encodeURIComponent(cfg.env || 'development')}/public/${kind}/${op}`;
@@ -214,8 +215,17 @@ export function useICloudRemote(activeRoom, enabled = true) {
     const cfg = { ...cfgRef.current, room: activeRoomRef.current || cfgRef.current.room };
     if (!cfg.container || !cfg.room || (!hasNativeCK && !cfg.token)) return;
     try {
-      const frames = await backendRingFrames(cfg);                 // newest-first; may be 1 (old bridge) or many
-      if (!frames.length) { setStatus('waiting for your PC…'); return; }
+      const raw = await backendRingFrames(cfg);                    // newest-first; may be 1 (old bridge) or many
+      if (!raw.length) { setStatus('waiting for your PC…'); return; }
+      // a PACKED frame's jpeg is a JSON array of {j, fts} — expand each into its own frame so playback is
+      // smoother. Each carries its own capture time (fts) so the ts-dedupe below drops the overlaps.
+      const frames = [];
+      for (const f of raw) {
+        if (typeof f.jpeg === 'string' && f.jpeg[0] === '[') {
+          try { const arr = JSON.parse(f.jpeg); for (const it of arr) { if (it && it.j) frames.push({ jpeg: it.j, w: f.w, h: f.h, ts: Number(it.fts) || f.ts, ack: f.ack }); } }
+          catch (e) { frames.push(f); }
+        } else frames.push(f);
+      }
       for (const f of frames) if (f.ack > lastAckRef.current) lastAckRef.current = f.ack;
       const fresh = frames.filter((f) => f.ts > lastTsRef.current).sort((a, b) => a.ts - b.ts);   // oldest-first
       if (fresh.length) {
@@ -314,6 +324,7 @@ export function useICloudRemote(activeRoom, enabled = true) {
     pushLog('info', `connecting · ${hasNativeCK ? 'native' : 'web'} · env ${c.env} · room ${c.room}`);
     pollFrame();
     sendCmd('shot');
+    sendCmd('pack', { text: c.packing ? 'on' : 'off' });   // restore the frame-packing preference on the PC
     pollRef.current = setInterval(pollFrame, 700);   // one lookup of the whole ring per tick (don't flood)
     lastKeepRef.current = Date.now();
     // Freshness watchdog + keepalive. Runs often and nudges the PC bridge with a 'shot' when the picture

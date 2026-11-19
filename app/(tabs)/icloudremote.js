@@ -546,6 +546,10 @@ export default function ICloudRemoteScreen() {
               {zoom > 1.01 ? <MenuItem s={s} label="Reset zoom" onPress={doMenu(() => applyZP(1, 0, 0))} /> : null}
               <MenuItem s={s} label={`Picture: ${PIC_LABEL[picMode]}`} accent={picMode !== 'fast'}
                 onPress={doMenu(() => { const order = ['fast', 'clear', 'text']; const n = order[(order.indexOf(picMode) + 1) % 3]; setPicMode(n); fire('quality', { text: n }, null, { label: `Picture: ${PIC_LABEL[n]}` }); })} />
+              {mode === 'computer' ? (
+                <MenuItem s={s} label={`Frame packing: ${r.cfg.packing ? 'ON · smoother' : 'off'}`} accent={!!r.cfg.packing}
+                  onPress={doMenu(() => { const on = !r.cfg.packing; r.setCfg({ packing: on }); fire('pack', { text: on ? 'on' : 'off' }, null, { label: on ? 'Frame packing on' : 'Frame packing off' }); })} />
+              ) : null}
               {r.connected && !r.signedIn ? <MenuItem s={s} label="Sign in to control" onPress={doMenu(r.beginSignIn)} /> : null}
               <MenuItem s={s} label="Live Remote (faster, normal Wi-Fi)" onPress={doMenu(() => router.push('/remote'))} />
               <MenuItem s={s} label="Error log" onPress={doMenu(() => setLogOpen(true))} />
