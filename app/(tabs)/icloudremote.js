@@ -106,6 +106,7 @@ export default function ICloudRemoteScreen() {
   useEffect(() => { precisionRef.current = precision; }, [precision]);
   const [modePickOpen, setModePickOpen] = useState(false);
   const [webUrl, setWebUrl] = useState('');
+  const [topOpen, setTopOpen] = useState(false);   // top bar collapses to a dot; tap to expand
 
   // ---------- Chrome Remote Desktop-style immersive canvas ----------
   // The picture fills the whole screen; a top status pill and a bottom control pill float over it and
@@ -559,36 +560,46 @@ export default function ICloudRemoteScreen() {
         {zoom > 1.01 ? (
           <Pressable style={s.resetZoom} onPress={() => applyZP(1, 0, 0)}><Text style={s.resetZoomTxt}>{Math.round(zoom * 100)}%  ✕</Text></Pressable>
         ) : null}
-        {/* ============ top bar — status + ALL controls live up here, so the bottom stays clear for typing ============ */}
+        {/* ============ top bar — collapses to a single dot; tap to expand the status + controls ============ */}
         <Animated.View pointerEvents="box-none" style={[s.floatTop, { top: insets.top + 8, opacity: chromeOpacity }]}>
-          <View style={s.floatTopInner}>
-            <Pressable onPress={() => { showChrome(); setModePickOpen(true); }} style={s.modeChip} hitSlop={4}>
-              <View style={[s.dot, { backgroundColor: dotColor }]} />
-              <Ico name={MODE_ICON[mode]} size={16} color="#fff" />
-              <Text style={s.modeChipTxt} numberOfLines={1}>{modeLabel}</Text>
-              <Svg width={12} height={12} viewBox="0 0 24 24" fill="none"><Path d="M6 9l6 6 6-6" stroke="rgba(255,255,255,0.6)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" /></Svg>
+          {!topOpen ? (
+            <Pressable onPress={() => { showChrome(); setTopOpen(true); }} style={s.topDot} hitSlop={12}>
+              <View style={[s.dot, { backgroundColor: dotColor, width: 10, height: 10, borderRadius: 5 }]} />
+              <Ico name={MODE_ICON[mode]} size={15} color="#fff" />
             </Pressable>
-            <Text
-              style={[s.floatStatusTxt, toast && { color: toast.tone === 'bad' ? t.red : toast.tone === 'ok' ? t.green : t.label, fontWeight: '700' }]}
-              numberOfLines={1}
-            >
-              {toast ? toast.text : sub}
-            </Text>
-            <Pressable onPress={() => { showChrome(); setMenuOpen(true); }} hitSlop={10} style={s.menuBtn}>
-              <Ico name="dots" size={18} color="#fff" />
-            </Pressable>
-          </View>
-          {/* control row — moved up from the bottom */}
-          <View style={[s.floatBottomInner, { marginTop: 8, alignSelf: 'center' }]}>
-            <FloatBtn s={s} icon="cursor" on={precision} onPress={() => { showChrome(); const n = !precision; setPrecision(n); showToast(n ? 'Precision on — fine control' : 'Precision off', 'wait'); }} />
-            <FloatBtn s={s} icon="hand" on={dragMode} onPress={() => { showChrome(); setDragMode((v) => !v); }} />
-            <FloatBtn s={s} icon="plus" onPress={() => { showChrome(); zoomBy(1.6); }} />
-            <FloatBtn s={s} icon="minus" onPress={() => { showChrome(); zoomBy(1 / 1.6); }} />
-            {mode !== 'web' ? <FloatBtn s={s} icon="screens" onPress={() => { showChrome(); setScreenPickOpen(true); }} /> : null}
-            {zoom > 1.01 ? (
-              <Pressable style={s.floatZoomChip} onPress={() => { showChrome(); applyZP(1, 0, 0); }}><Text style={s.floatZoomTxt}>{Math.round(zoom * 100)}%</Text></Pressable>
-            ) : null}
-          </View>
+          ) : (
+            <>
+              <View style={s.floatTopInner}>
+                <Pressable onPress={() => { showChrome(); setTopOpen(false); }} hitSlop={10} style={s.topCollapse}>
+                  <Svg width={14} height={14} viewBox="0 0 24 24" fill="none"><Path d="M18 15l-6-6-6 6" stroke="#fff" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" /></Svg>
+                </Pressable>
+                <Pressable onPress={() => { showChrome(); setModePickOpen(true); }} style={s.modeChip} hitSlop={4}>
+                  <Ico name={MODE_ICON[mode]} size={16} color="#fff" />
+                  <Text style={s.modeChipTxt} numberOfLines={1}>{modeLabel}</Text>
+                  <Svg width={12} height={12} viewBox="0 0 24 24" fill="none"><Path d="M6 9l6 6 6-6" stroke="rgba(255,255,255,0.6)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" /></Svg>
+                </Pressable>
+                <Text
+                  style={[s.floatStatusTxt, toast && { color: toast.tone === 'bad' ? t.red : toast.tone === 'ok' ? t.green : t.label, fontWeight: '700' }]}
+                  numberOfLines={1}
+                >
+                  {toast ? toast.text : sub}
+                </Text>
+                <Pressable onPress={() => { showChrome(); setMenuOpen(true); }} hitSlop={10} style={s.menuBtn}>
+                  <Ico name="dots" size={18} color="#fff" />
+                </Pressable>
+              </View>
+              <View style={[s.floatBottomInner, { marginTop: 8, alignSelf: 'center' }]}>
+                <FloatBtn s={s} icon="cursor" on={precision} onPress={() => { showChrome(); const n = !precision; setPrecision(n); showToast(n ? 'Precision on — fine control' : 'Precision off', 'wait'); }} />
+                <FloatBtn s={s} icon="hand" on={dragMode} onPress={() => { showChrome(); setDragMode((v) => !v); }} />
+                <FloatBtn s={s} icon="plus" onPress={() => { showChrome(); zoomBy(1.6); }} />
+                <FloatBtn s={s} icon="minus" onPress={() => { showChrome(); zoomBy(1 / 1.6); }} />
+                {mode !== 'web' ? <FloatBtn s={s} icon="screens" onPress={() => { showChrome(); setScreenPickOpen(true); }} /> : null}
+                {zoom > 1.01 ? (
+                  <Pressable style={s.floatZoomChip} onPress={() => { showChrome(); applyZP(1, 0, 0); }}><Text style={s.floatZoomTxt}>{Math.round(zoom * 100)}%</Text></Pressable>
+                ) : null}
+              </View>
+            </>
+          )}
         </Animated.View>
 
         {/* ============ Web mode: address bar on top, tab switching on LEFT/RIGHT side rails (clear of the page) ====== */}
@@ -919,7 +930,9 @@ const styles = (t) => {
     // Chrome-Remote-Desktop-style floating pills: the canvas fills the whole screen; these float over it
     // and fade to a translucent ghost when idle (see showChrome), so the picture — not the UI — dominates.
     floatTop: { position: 'absolute', left: 10, right: 10 },
-    floatTopInner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(10,10,12,0.9)', borderRadius: 999, paddingLeft: 6, paddingRight: 6, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' },
+    floatTopInner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(10,10,12,0.92)', borderRadius: 999, paddingLeft: 6, paddingRight: 6, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' },
+    topDot: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'center', backgroundColor: 'rgba(10,10,12,0.92)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+    topCollapse: { width: 30, height: 30, borderRadius: 999, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.1)' },
     modeChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
     modeChipTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
     modeChipCaret: { color: 'rgba(255,255,255,0.55)', fontSize: 10 },
@@ -932,9 +945,9 @@ const styles = (t) => {
     floatZoomChip: { backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 999, paddingHorizontal: 12, height: 44, alignItems: 'center', justifyContent: 'center' },
     floatZoomTxt: { color: '#fff', fontSize: 12, fontWeight: '700' },
     // persistent typing bar — solid black, always visible; backspace / type / send / enter all wired to the PC
-    typeBar: { flexDirection: 'row', alignItems: 'center', gap: 8, width: '94%', maxWidth: 580, backgroundColor: '#000', borderRadius: 16, paddingHorizontal: 8, paddingVertical: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
-    typeBack: { width: 44, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.14)' },
-    typeInput: { flex: 1, color: '#fff', fontSize: 16, paddingHorizontal: 8, paddingVertical: 9 },
+    typeBar: { flexDirection: 'row', alignItems: 'center', gap: 8, width: '94%', maxWidth: 580, backgroundColor: '#000', borderRadius: 16, paddingHorizontal: 8, paddingVertical: 8, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.28)' },
+    typeBack: { width: 44, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.16)' },
+    typeInput: { flex: 1, color: '#ffffff', fontSize: 16, fontWeight: '500', paddingHorizontal: 8, paddingVertical: 9 },
     typeSend: { width: 46, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.18)' },
     typeEnter: { width: 52, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#5B6CFF' },
     // Web mode: address bar (top) + tab switching on side rails (clear of the page content)
@@ -970,14 +983,6 @@ const styles = (t) => {
     resetZoom: { position: 'absolute', right: 12, bottom: 12, backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
     resetZoomTxt: { color: '#fff', fontSize: 12, fontWeight: '700' },
     toast: { position: 'absolute', left: 14, right: 14, top: 10, alignSelf: 'center', backgroundColor: 'rgba(40,40,44,0.95)', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
-    typeBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingTop: 4, paddingBottom: 8, backgroundColor: t.bg },
-    typeBarInput: { flex: 1, backgroundColor: t.card, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 10, color: t.label, fontSize: 15, borderWidth: StyleSheet.hairlineWidth, borderColor: t.sep },
-    typeBarIcon: { paddingHorizontal: 6, paddingVertical: 6 },
-    typeBarIconTxt: { fontSize: 20 },
-    typeBarSend: { backgroundColor: t.blue, borderRadius: 999, paddingHorizontal: 16, paddingVertical: 10 },
-    typeBarSendTxt: { color: '#fff', fontSize: 15, fontWeight: '700' },
-    typeBarGhost: { backgroundColor: t.card, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: t.sep },
-    typeBarGhostTxt: { color: t.label, fontSize: 15, fontWeight: '600' },
     screenRow: { paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: t.sep },
     screenRowTxt: { color: t.label, fontSize: 16, fontWeight: '500' },
     toastOk: { backgroundColor: 'rgba(28,120,56,0.94)' },
