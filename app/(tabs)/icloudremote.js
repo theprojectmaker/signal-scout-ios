@@ -1,7 +1,7 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
 import {
   View, Text, Pressable, TextInput, ScrollView, StyleSheet, Image, PanResponder, Modal,
-  KeyboardAvoidingView, Platform, ActivityIndicator, useWindowDimensions,
+  KeyboardAvoidingView, Platform, ActivityIndicator, useWindowDimensions, Animated,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
@@ -62,6 +62,22 @@ export default function ICloudRemoteScreen() {
   const [precision, setPrecision] = useState(false);   // trackpad-style fine movement (opt-in)
   const precisionRef = useRef(false);
   useEffect(() => { precisionRef.current = precision; }, [precision]);
+  const [modePickOpen, setModePickOpen] = useState(false);
+
+  // ---------- Chrome Remote Desktop-style immersive canvas ----------
+  // The picture fills the whole screen; a top status pill and a bottom control pill float over it and
+  // fade to a translucent ghost after a few seconds idle (never fully gone, so they're always findable),
+  // coming back to full opacity the instant you touch the screen or press anything in them.
+  const chromeOpacity = useRef(new Animated.Value(1)).current;
+  const hideTimerRef = useRef(null);
+  const showChrome = useCallback(() => {
+    clearTimeout(hideTimerRef.current);
+    Animated.timing(chromeOpacity, { toValue: 1, duration: 140, useNativeDriver: true }).start();
+    hideTimerRef.current = setTimeout(() => {
+      Animated.timing(chromeOpacity, { toValue: 0.16, duration: 450, useNativeDriver: true }).start();
+    }, 3200);
+  }, [chromeOpacity]);
+  useEffect(() => { showChrome(); return () => clearTimeout(hideTimerRef.current); }, [showChrome]);
 
   // ---------- zoom / pan ----------
   const box = useRef({ w: 1, h: 1 });
@@ -240,6 +256,7 @@ export default function ICloudRemoteScreen() {
       onMoveShouldSetPanResponder: () => true,
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: (e) => {
+        showChrome();
         const ts = e.nativeEvent.touches;
         g.moved = false; g.tracking = false; g.longFired = false; g.pinch = null; g.multi = false; g.last = null; g.webDragged = false;
         if (ts && ts.length >= 2) { startPinch(ts); return; }
@@ -401,26 +418,10 @@ export default function ICloudRemoteScreen() {
     ? (stale ? `frozen ${frameAgeS}s — check the PC bridge` : (frameAgeS <= 2 ? (fps >= 2 ? `Live · ${fps} fps` : 'Live') : `Live · ${frameAgeS}s`))
     : r.connected ? (errish ? 'can’t reach CloudKit' : 'waiting for your PC…') : 'not connected';
 
+  const modeInfo = { computer: ['🖥', 'Computer'], turbo: ['⚡', 'Turbo β'], web: ['🌐', 'Web'] }[mode];
+
   return (
-    <SafeAreaView style={s.safe} edges={['top']}>
-      <View style={s.topBar}>
-        <View style={s.dotRow}>
-          <View style={[s.dot, { backgroundColor: dotColor }]} />
-          <Text style={[s.topTxt, toast && { color: toast.tone === 'bad' ? t.red : toast.tone === 'ok' ? t.green : t.label, fontWeight: '700' }]} numberOfLines={1}>{toast ? toast.text : `${title}  ·  ${sub}`}</Text>
-        </View>
-        <Pressable onPress={() => setMenuOpen(true)} hitSlop={10} style={s.menuBtn}>
-          <Text style={s.menuDots}>•••</Text>
-        </Pressable>
-      </View>
-
-      <View style={s.tabRow}>
-        {[['computer', '🖥  Computer'], ['turbo', '⚡  Turbo β'], ['web', '🌐  Web']].map(([m, label]) => (
-          <Pressable key={m} onPress={() => setMode(m)} style={[s.tabBtn, mode === m && s.tabBtnOn]}>
-            <Text style={[s.tabTxt, mode === m && s.tabTxtOn]} numberOfLines={1}>{label}</Text>
-          </Pressable>
-        ))}
-      </View>
-
+    <View style={s.safe}>
       <View
         style={s.screenWrap}
         onLayout={(e) => { const w = e.nativeEvent.layout.width, h = e.nativeEvent.layout.height; box.current = { w, h }; setBoxDim({ w, h }); }}
@@ -439,7 +440,7 @@ export default function ICloudRemoteScreen() {
             />
           </View>
         ) : !r.connected ? (
-          <View style={s.center}>
+          <View style={[s.center, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
             <Text style={s.emptyTitle}>iCloud Remote</Text>
             <Text style={s.emptyHint}>Control your PC over iCloud — works on locked-down Wi-Fi.</Text>
             <Pressable style={[s.bigBtn, needsSetup && { opacity: 0.4 }]} disabled={needsSetup} onPress={r.connect}>
@@ -448,7 +449,7 @@ export default function ICloudRemoteScreen() {
             {needsSetup ? <Text style={s.emptyMeta}>Open ••• → Settings to finish setup</Text> : null}
           </View>
         ) : (
-          <View style={s.center}>
+          <View style={[s.center, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
             {!errish && <ActivityIndicator color="#8a8a8a" />}
             <Text style={s.emptyTitle}>{errish ? 'Can’t reach CloudKit' : 'Waiting for your PC…'}</Text>
             {errish ? (
@@ -496,55 +497,55 @@ export default function ICloudRemoteScreen() {
         {zoom > 1.01 ? (
           <Pressable style={s.resetZoom} onPress={() => applyZP(1, 0, 0)}><Text style={s.resetZoomTxt}>{Math.round(zoom * 100)}%  ✕</Text></Pressable>
         ) : null}
-        {/* feedback now shows in the top bar (next to •••) so it doesn't cover the screen */}
+        {/* ============ floating top pill — tap the mode chip to switch, ••• for everything else ============ */}
+        <Animated.View pointerEvents="box-none" style={[s.floatTop, { top: insets.top + 8, opacity: chromeOpacity }]}>
+          <View style={s.floatTopInner}>
+            <Pressable onPress={() => { showChrome(); setModePickOpen(true); }} style={s.modeChip} hitSlop={4}>
+              <View style={[s.dot, { backgroundColor: dotColor }]} />
+              <Text style={s.modeChipTxt} numberOfLines={1}>{modeInfo[0]} {modeInfo[1]}</Text>
+              <Text style={s.modeChipCaret}>▾</Text>
+            </Pressable>
+            <Text
+              style={[s.floatStatusTxt, toast && { color: toast.tone === 'bad' ? t.red : toast.tone === 'ok' ? t.green : t.label, fontWeight: '700' }]}
+              numberOfLines={1}
+            >
+              {toast ? toast.text : sub}
+            </Text>
+            <Pressable onPress={() => { showChrome(); setMenuOpen(true); }} hitSlop={10} style={s.menuBtn}>
+              <Text style={s.menuDots}>•••</Text>
+            </Pressable>
+          </View>
+        </Animated.View>
+
+        {/* ============ floating bottom pill — the few controls used constantly; everything else lives in ••• ============ */}
+        <Animated.View pointerEvents="box-none" style={[s.floatBottom, { bottom: insets.bottom + 14, opacity: chromeOpacity }]}>
+          <View style={s.floatBottomInner}>
+            <FloatBtn s={s} glyph="⌨" onPress={() => { showChrome(); setKbOpen(true); }} />
+            <FloatBtn s={s} glyph="◎" on={precision} onPress={() => { showChrome(); const n = !precision; setPrecision(n); showToast(n ? 'Precision on — fine trackpad control' : 'Precision off', 'wait'); }} />
+            <FloatBtn s={s} glyph="✋" on={dragMode} onPress={() => { showChrome(); setDragMode((v) => !v); }} />
+            {zoom > 1.01 ? (
+              <Pressable style={s.floatZoomChip} onPress={() => { showChrome(); applyZP(1, 0, 0); }}>
+                <Text style={s.floatZoomTxt}>{Math.round(zoom * 100)}%  ✕</Text>
+              </Pressable>
+            ) : null}
+            <FloatBtn s={s} glyph="•••" wide onPress={() => { showChrome(); setMenuOpen(true); }} />
+          </View>
+        </Animated.View>
       </View>
 
-      {/* power dock — the common controls one tap away, instead of digging through the ••• menu */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.dock} contentContainerStyle={s.dockRow} keyboardShouldPersistTaps="handled">
-        {mode === 'web' ? (
-          <>
-            <DockBtn s={s} glyph="‹" label="Back" onPress={() => fire('key', { text: 'BrowserBack' }, null, { label: 'Back' })} />
-            <DockBtn s={s} glyph="⟳" label="Reload" onPress={() => fire('key', { text: 'BrowserReload' }, null, { label: 'Reload' })} />
-            <DockBtn s={s} glyph="⌂" label="Home" onPress={() => fire('key', { text: 'BrowserHome' }, null, { label: 'Home' })} />
-          </>
-        ) : null}
-        <DockBtn s={s} glyph="⌨" label="Keys" onPress={() => setKeysOpen(true)} />
-        <DockBtn s={s} glyph="▲" label="Scroll" onPress={() => fire('wheel', { dy: -300 }, null, { label: 'Scroll up' })} />
-        <DockBtn s={s} glyph="▼" label="Scroll" onPress={() => fire('wheel', { dy: 300 }, null, { label: 'Scroll down' })} />
-        <DockBtn s={s} glyph="◎" label="Precise" on={precision} onPress={() => { const n = !precision; setPrecision(n); showToast(n ? 'Precision on — fine trackpad control' : 'Precision off', 'wait'); }} />
-        <DockBtn s={s} glyph="✋" label="Drag" on={dragMode} onPress={() => setDragMode((v) => !v)} />
-        <DockBtn s={s} glyph="＋" label="Zoom" onPress={() => zoomBy(1.6)} />
-        <DockBtn s={s} glyph="－" label="Zoom" onPress={() => zoomBy(1 / 1.6)} />
-        {mode !== 'web' ? (
-          <>
-            <DockBtn s={s} glyph="🖥" label="Screens" onPress={() => setScreenPickOpen(true)} />
-            {isTurbo
-              ? <DockBtn s={s} glyph="◈" label="Repaint" onPress={() => fire('tr', {}, null, { label: 'Repaint' })} />
-              : <DockBtn s={s} glyph="📖" label="HD" onPress={() => fire('hd', {}, null, { label: 'HD boost' })} />}
-          </>
-        ) : null}
-        <DockBtn s={s} glyph="?" label="Gestures" onPress={() => showToast(mode === 'web' ? 'Tap the blue bar to type a URL · tap links · scroll with ▲▼ or a drag · pinch to zoom' : 'Move = mouse · tap = click · double-tap = double-click · hold = right-click · pinch = zoom · 2 fingers = pan', 'wait')} />
-      </ScrollView>
-
-      {/* persistent typing bar — tap it and the keyboard rises; type + Send goes to the PC */}
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={s.typeBar}>
-          <TextInput
-            style={s.typeBarInput}
-            value={barText}
-            onChangeText={setBarText}
-            placeholder="Type to your PC…"
-            placeholderTextColor={t.label3}
-            autoCapitalize="none"
-            autoCorrect={false}
-            returnKeyType="go"
-            onSubmitEditing={() => { if (barText) fire('type', { text: barText }, null, { label: 'Typing' }); fire('key', { text: 'ENTER' }, null, { label: 'Enter' }); setBarText(''); }}
-          />
-          <Pressable style={s.typeBarIcon} onPress={() => fire('key', { text: 'BACKSPACE' }, null, { label: 'Backspace' })} hitSlop={6}><Text style={s.typeBarIconTxt}>⌫</Text></Pressable>
-          <Pressable style={s.typeBarGhost} onPress={() => { if (barText) { fire('type', { text: barText }, null, { label: 'Typing' }); setBarText(''); } }}><Text style={s.typeBarGhostTxt}>Send</Text></Pressable>
-          <Pressable style={s.typeBarSend} onPress={() => { if (barText) fire('type', { text: barText }, null, { label: 'Typing' }); fire('key', { text: 'ENTER' }, null, { label: 'Enter' }); setBarText(''); }}><Text style={s.typeBarSendTxt}>↵ Enter</Text></Pressable>
-        </View>
-      </KeyboardAvoidingView>
+      {/* ============ mode picker ============ */}
+      <Modal visible={modePickOpen} transparent animationType="fade" onRequestClose={() => setModePickOpen(false)}>
+        <Pressable style={s.keysBackdrop} onPress={() => setModePickOpen(false)}>
+          <Pressable style={s.keysCard} onPress={() => {}}>
+            <View style={s.sheetHead}><Text style={s.sheetTitle}>Switch to</Text><Pressable onPress={() => setModePickOpen(false)} hitSlop={8}><Text style={s.sheetDone}>Done</Text></Pressable></View>
+            {[['computer', '🖥  Computer'], ['turbo', '⚡  Turbo β'], ['web', '🌐  Web']].map(([m, label]) => (
+              <Pressable key={m} style={s.screenRow} onPress={() => { setModePickOpen(false); setMode(m); }}>
+                <Text style={[s.screenRowTxt, mode === m && { color: t.blue, fontWeight: '700' }]}>{label}{mode === m ? '   ✓' : ''}</Text>
+              </Pressable>
+            ))}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* ============ dropdown menu ============ */}
       <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
@@ -553,7 +554,24 @@ export default function ICloudRemoteScreen() {
             <ScrollView bounces={false}>
               <MenuItem s={s} label={isTurbo ? 'Repaint screen' : 'Refresh now'} onPress={doMenu(() => (isTurbo ? fire('tr', {}, null, { label: 'Repaint' }) : fire('shot', {}, null, { label: 'Refresh' })))} />
               <MenuItem s={s} label="Type text…" onPress={doMenu(() => setKbOpen(true))} />
+              <MenuItem s={s} label="Scroll up" onPress={doMenu(() => fire('wheel', { dy: -300 }, null, { label: 'Scroll up' }))} />
+              <MenuItem s={s} label="Scroll down" onPress={doMenu(() => fire('wheel', { dy: 300 }, null, { label: 'Scroll down' }))} />
+              {mode === 'web' ? (
+                <>
+                  <MenuItem s={s} label="Back" onPress={doMenu(() => fire('key', { text: 'BrowserBack' }, null, { label: 'Back' }))} />
+                  <MenuItem s={s} label="Reload" onPress={doMenu(() => fire('key', { text: 'BrowserReload' }, null, { label: 'Reload' }))} />
+                  <MenuItem s={s} label="Home" onPress={doMenu(() => fire('key', { text: 'BrowserHome' }, null, { label: 'Home' }))} />
+                </>
+              ) : (
+                <>
+                  <MenuItem s={s} label="Screens…" onPress={doMenu(() => setScreenPickOpen(true))} />
+                  {isTurbo
+                    ? <MenuItem s={s} label="Repaint screen" onPress={doMenu(() => fire('tr', {}, null, { label: 'Repaint' }))} />
+                    : <MenuItem s={s} label="HD boost" onPress={doMenu(() => fire('hd', {}, null, { label: 'HD boost' }))} />}
+                </>
+              )}
               {zoom > 1.01 ? <MenuItem s={s} label="Reset zoom" onPress={doMenu(() => applyZP(1, 0, 0))} /> : null}
+              <MenuItem s={s} label="Gestures help" onPress={doMenu(() => showToast(mode === 'web' ? 'Tap the blue bar to type a URL · tap links · scroll with ▲▼ or a drag · pinch to zoom' : 'Move = mouse · tap = click · double-tap = double-click · hold = right-click · pinch = zoom · 2 fingers = pan', 'wait'))} />
               {isTurbo ? (
                 <MenuItem s={s} label={`Turbo quality: ${TQ_LABEL[r.cfg.turboQ || 0]}`} accent
                   onPress={doMenu(() => { const order = [0, 2, 4]; const n = order[(order.indexOf(r.cfg.turboQ || 0) + 1) % 3]; r.setCfg({ turboQ: n }); fire('tq', { text: String(n) }, null, { label: `Quality: ${TQ_LABEL[n]}` }); })} />
@@ -720,7 +738,7 @@ export default function ICloudRemoteScreen() {
           ) : null}
         </SafeAreaView>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -747,6 +765,13 @@ function DockBtn({ s, glyph, label, onPress, on }) {
     </Pressable>
   );
 }
+function FloatBtn({ s, glyph, onPress, on, wide }) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [s.floatBtn, wide && s.floatBtnWide, on && s.floatBtnOn, pressed && { opacity: 0.6 }]}>
+      <Text style={[s.floatBtnGlyph, on && s.floatBtnOnTxt]}>{glyph}</Text>
+    </Pressable>
+  );
+}
 
 const styles = (t) => {
   const st = StyleSheet.create({
@@ -758,8 +783,8 @@ const styles = (t) => {
     dotRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 7 },
     dot: { width: 8, height: 8, borderRadius: 4 },
     topTxt: { flex: 1, color: t.label2, fontSize: 11 },
-    menuBtn: { backgroundColor: t.card, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 6, borderWidth: 1, borderColor: t.sep },
-    menuDots: { color: t.label, fontSize: 14, fontWeight: '800', letterSpacing: 1 },
+    menuBtn: { backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
+    menuDots: { color: '#fff', fontSize: 14, fontWeight: '800', letterSpacing: 1 },
     tabRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingBottom: 8 },
     tabBtn: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 10, backgroundColor: t.card, borderWidth: StyleSheet.hairlineWidth, borderColor: t.sep },
     tabBtnOn: { backgroundColor: t.blue, borderColor: t.blue },
@@ -767,6 +792,24 @@ const styles = (t) => {
     tabTxtOn: { color: '#fff' },
 
     screenWrap: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+
+    // Chrome-Remote-Desktop-style floating pills: the canvas fills the whole screen; these float over it
+    // and fade to a translucent ghost when idle (see showChrome), so the picture — not the UI — dominates.
+    floatTop: { position: 'absolute', left: 10, right: 10 },
+    floatTopInner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(28,28,30,0.72)', borderRadius: 999, paddingLeft: 6, paddingRight: 6, paddingVertical: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.12)' },
+    modeChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
+    modeChipTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
+    modeChipCaret: { color: 'rgba(255,255,255,0.55)', fontSize: 10 },
+    floatStatusTxt: { flex: 1, color: 'rgba(255,255,255,0.72)', fontSize: 11, textAlign: 'center' },
+    floatBottom: { position: 'absolute', alignSelf: 'center' },
+    floatBottomInner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(28,28,30,0.72)', borderRadius: 999, padding: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.12)' },
+    floatBtn: { width: 44, height: 44, borderRadius: 999, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.08)' },
+    floatBtnWide: { width: 54 },
+    floatBtnOn: { backgroundColor: '#0A84FF' },
+    floatBtnGlyph: { color: '#fff', fontSize: 18 },
+    floatBtnOnTxt: { color: '#fff' },
+    floatZoomChip: { backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 999, paddingHorizontal: 12, height: 44, alignItems: 'center', justifyContent: 'center' },
+    floatZoomTxt: { color: '#fff', fontSize: 12, fontWeight: '700' },
     frame: { width: '100%', height: '100%' },
     dock: { backgroundColor: t.bg, flexGrow: 0 },
     dockRow: { paddingHorizontal: 10, paddingVertical: 7, gap: 7, alignItems: 'center' },
