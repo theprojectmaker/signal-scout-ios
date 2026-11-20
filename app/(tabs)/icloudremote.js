@@ -54,6 +54,7 @@ const ICONS = {
   send: ['M4 12l16-7-7 16-2-7z'],
   enter: ['M20 6v5a3 3 0 0 1-3 3H5', 'M9 10l-4 4 4 4'],
   back: ['M11 7l-5 5 5 5', 'M6 12h11a3 3 0 0 0 0-6h-2'],
+  backspace: ['M9 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9L2 12z', 'M17 9l-5 6', 'M12 9l5 6'],
   settings: ['M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M19 12a7 7 0 0 0-.1-1l2-1.6-2-3.4-2.3 1a7 7 0 0 0-1.7-1L16.5 3h-4l-.4 2.4a7 7 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.6a7 7 0 0 0 0 2l-2 1.6 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.4 2.4h4l.4-2.4a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.6a7 7 0 0 0 .1-1z'],
   check: ['M5 13l4 4 10-11'],
 };
@@ -113,8 +114,8 @@ export default function ICloudRemoteScreen() {
     clearTimeout(hideTimerRef.current);
     Animated.timing(chromeOpacity, { toValue: 1, duration: 140, useNativeDriver: true }).start();
     hideTimerRef.current = setTimeout(() => {
-      Animated.timing(chromeOpacity, { toValue: 0.16, duration: 450, useNativeDriver: true }).start();
-    }, 3200);
+      Animated.timing(chromeOpacity, { toValue: 0.34, duration: 450, useNativeDriver: true }).start();   // stays clearly findable when idle
+    }, 3600);
   }, [chromeOpacity]);
   useEffect(() => { showChrome(); return () => clearTimeout(hideTimerRef.current); }, [showChrome]);
 
@@ -623,7 +624,7 @@ export default function ICloudRemoteScreen() {
             </View>
           </Animated.View>
           <View style={s.typeBar}>
-            <Pressable style={s.typeIcon} onPress={() => { showChrome(); fire('key', { text: 'BACKSPACE' }, null, { label: 'Backspace' }); }} hitSlop={8}><Ico name="back" size={20} color={t.label} /></Pressable>
+            <Pressable style={s.typeBack} onPress={() => { showChrome(); fire('key', { text: 'BACKSPACE' }, null, { label: 'Backspace' }); }} hitSlop={8}><Ico name="backspace" size={22} color="#fff" /></Pressable>
             <TextInput
               style={s.typeInput}
               value={barText}
@@ -915,24 +916,24 @@ const styles = (t) => {
     // Chrome-Remote-Desktop-style floating pills: the canvas fills the whole screen; these float over it
     // and fade to a translucent ghost when idle (see showChrome), so the picture — not the UI — dominates.
     floatTop: { position: 'absolute', left: 10, right: 10 },
-    floatTopInner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(28,28,30,0.72)', borderRadius: 999, paddingLeft: 6, paddingRight: 6, paddingVertical: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.12)' },
+    floatTopInner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(10,10,12,0.9)', borderRadius: 999, paddingLeft: 6, paddingRight: 6, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' },
     modeChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6 },
     modeChipTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
     modeChipCaret: { color: 'rgba(255,255,255,0.55)', fontSize: 10 },
     floatStatusTxt: { flex: 1, color: 'rgba(255,255,255,0.72)', fontSize: 11, textAlign: 'center' },
     bottomDock: { position: 'absolute', left: 0, right: 0, bottom: 0, alignItems: 'center', gap: 10 },
-    floatBottomInner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(22,22,26,0.82)', borderRadius: 999, padding: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.14)' },
+    floatBottomInner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(10,10,12,0.9)', borderRadius: 999, padding: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' },
     floatBtn: { width: 44, height: 44, borderRadius: 999, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.08)' },
     floatBtnWide: { width: 54 },
     floatBtnOn: { backgroundColor: '#5B6CFF' },
     floatZoomChip: { backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 999, paddingHorizontal: 12, height: 44, alignItems: 'center', justifyContent: 'center' },
     floatZoomTxt: { color: '#fff', fontSize: 12, fontWeight: '700' },
-    // persistent typing bar — always visible, backspace / type / send / enter all wired to the PC
-    typeBar: { flexDirection: 'row', alignItems: 'center', gap: 8, width: '92%', maxWidth: 560, backgroundColor: 'rgba(22,22,26,0.92)', borderRadius: 16, paddingHorizontal: 8, paddingVertical: 7, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.14)' },
-    typeIcon: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.08)' },
-    typeInput: { flex: 1, color: '#fff', fontSize: 16, paddingHorizontal: 6, paddingVertical: 8 },
-    typeSend: { width: 42, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.14)' },
-    typeEnter: { width: 48, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#5B6CFF' },
+    // persistent typing bar — solid black, always visible; backspace / type / send / enter all wired to the PC
+    typeBar: { flexDirection: 'row', alignItems: 'center', gap: 8, width: '94%', maxWidth: 580, backgroundColor: '#000', borderRadius: 16, paddingHorizontal: 8, paddingVertical: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+    typeBack: { width: 44, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.14)' },
+    typeInput: { flex: 1, color: '#fff', fontSize: 16, paddingHorizontal: 8, paddingVertical: 9 },
+    typeSend: { width: 46, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.18)' },
+    typeEnter: { width: 52, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#5B6CFF' },
     // Web mode: tab strip + address bar
     webBar: { position: 'absolute', left: 10, right: 10, gap: 6 },
     webTabsRow: { gap: 6, alignItems: 'center', paddingRight: 4 },
