@@ -602,8 +602,8 @@ export default function ICloudRemoteScreen() {
           )}
         </Animated.View>
 
-        {/* ============ Web mode: address bar on top, tab switching on LEFT/RIGHT side rails (clear of the page) ====== */}
-        {mode === 'web' && r.connected ? (
+        {/* ============ Web mode: address bar + tab rails — only when the top bar is expanded, so the page is clear ====== */}
+        {mode === 'web' && r.connected && topOpen ? (
           <>
             <Animated.View pointerEvents="box-none" style={[s.webUrlBar, { top: insets.top + 108, opacity: chromeOpacity }]}>
               <View style={s.webUrlRow}>
