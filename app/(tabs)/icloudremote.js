@@ -81,9 +81,12 @@ export default function ICloudRemoteScreen() {
   const [mode, setMode] = useState('computer');   // 'computer' = your PC (classic) · 'turbo' = your PC (delta-tile engine, beta) · 'web' = the iCloud web browser (room WEB)
   // All three ride CloudKit. Computer and Turbo are the SAME room (your PC) read two different ways; Web is the
   // browser agent's room. Switching Computer <-> Turbo keeps the connection and just swaps the reader.
-  const r = useICloudRemote(mode === 'web' ? 'WEB' : null, true, mode === 'turbo', mode === 'video');
+  const [webVideoOn, setWebVideoOn] = useState(false);   // Web mode: H.264 video player (option) vs default screenshots
+  const r = useICloudRemote(mode === 'web' ? 'WEB' : null, true, mode === 'turbo', mode === 'video' || (mode === 'web' && webVideoOn));
   const isTurbo = mode === 'turbo';
   const isVideo = mode === 'video';
+  const webVid = mode === 'web' && webVideoOn;           // showing the H.264 player inside Web mode
+  const usingVideo = isVideo || webVid;
   const [vidPlaying, setVidPlaying] = useState(false);
   const onVidStat = useCallback((m) => {
     if (m.t === 'playing') setVidPlaying(true);
@@ -437,9 +440,9 @@ export default function ICloudRemoteScreen() {
   // A cached frame (shown instantly on reopen, before the stream resumes) isn't "stale" — it's the
   // last screen while we reconnect. Only live frames get an age / stale check.
   const turboLive = isTurbo && !!(r.turboView && r.turboView.base);
-  const cachedOnly = !!(r.frame && r.frame.cached) && !turboLive && !isVideo;
+  const cachedOnly = !!(r.frame && r.frame.cached) && !turboLive && !usingVideo;
   // Turbo/Video are index-driven, so "age" there = how long since the PC's index last answered.
-  const frameAgeS = isVideo
+  const frameAgeS = usingVideo
     ? (r.videoInfo && r.videoInfo.aliveAt ? Math.max(0, Math.round((Date.now() - r.videoInfo.aliveAt) / 1000)) : null)
     : isTurbo
     ? (turboLive && r.turboInfo.aliveAt ? Math.max(0, Math.round((Date.now() - r.turboInfo.aliveAt) / 1000)) : null)
@@ -455,8 +458,10 @@ export default function ICloudRemoteScreen() {
     setTyped('');
   };
 
+  const videoLive = usingVideo && r.connected && vidPlaying;
+  useEffect(() => { if (!usingVideo) setVidPlaying(false); }, [usingVideo]);
   const title = mode === 'web' ? 'Web browser' : isVideo ? 'Video β' : isTurbo ? 'Turbo β' : (r.native ? 'iCloud Remote' : 'iCloud Remote · web');
-  const sub = isVideo
+  const sub = usingVideo
     ? (!r.connected ? 'not connected' : videoLive ? (stale ? `no link for ${frameAgeS}s — check the PC bridge` : `Live · video · ${r.videoInfo.kbs} KB/s`) : (errish ? 'can’t reach CloudKit' : 'starting video…'))
     : cachedOnly
     ? (r.connected ? 'reconnecting…' : 'tap to resume')
@@ -467,8 +472,6 @@ export default function ICloudRemoteScreen() {
     : r.connected ? (errish ? 'can’t reach CloudKit' : 'waiting for your PC…') : 'not connected';
 
   const modeLabel = { computer: 'Computer', turbo: 'Turbo', video: 'Video', web: 'Web' }[mode];
-  const videoLive = isVideo && r.connected && vidPlaying;
-  useEffect(() => { if (!isVideo) setVidPlaying(false); }, [isVideo]);
 
   return (
     <View style={s.safe}>
@@ -477,7 +480,7 @@ export default function ICloudRemoteScreen() {
         onLayout={(e) => { const w = e.nativeEvent.layout.width, h = e.nativeEvent.layout.height; box.current = { w, h }; setBoxDim({ w, h }); }}
         {...pan.panHandlers}
       >
-        {isVideo && r.connected ? (
+        {usingVideo && r.connected ? (
           <>
             <View style={[StyleSheet.absoluteFill, { transform: [{ translateX: off.x }, { translateY: off.y }, { scale: zoom }] }]} pointerEvents="none">
               <VideoCanvas sinkRef={r.videoSinkRef} onStat={onVidStat} />
@@ -486,7 +489,7 @@ export default function ICloudRemoteScreen() {
               <View style={s.center} pointerEvents="none">
                 <ActivityIndicator color="#8a8a8a" />
                 <Text style={s.emptyTitle}>Starting video…</Text>
-                <Text style={s.emptyHint}>Decoding the H.264 stream from your PC. First picture takes a moment.</Text>
+                <Text style={s.emptyHint}>{webVid ? 'Encoding the page as H.264. First picture takes a moment.' : 'Decoding the H.264 stream from your PC. First picture takes a moment.'}</Text>
               </View>
             ) : null}
           </>
@@ -685,6 +688,8 @@ export default function ICloudRemoteScreen() {
               <MenuItem s={s} label="Scroll down" onPress={doMenu(() => fire('wheel', { dy: 300 }, null, { label: 'Scroll down' }))} />
               {mode === 'web' ? (
                 <>
+                  <MenuItem s={s} label={`Picture: ${webVideoOn ? 'Smooth video (H.264)' : 'Screenshots (default)'}`} accent={webVideoOn}
+                    onPress={doMenu(() => { setWebVideoOn((v) => !v); showToast(!webVideoOn ? 'Smooth video on — H.264 of the page' : 'Back to screenshots', 'wait'); })} />
                   <MenuItem s={s} label="Back" onPress={doMenu(() => fire('key', { text: 'BrowserBack' }, null, { label: 'Back' }))} />
                   <MenuItem s={s} label="Reload" onPress={doMenu(() => fire('key', { text: 'BrowserReload' }, null, { label: 'Reload' }))} />
                   <MenuItem s={s} label="Home" onPress={doMenu(() => fire('key', { text: 'BrowserHome' }, null, { label: 'Home' }))} />

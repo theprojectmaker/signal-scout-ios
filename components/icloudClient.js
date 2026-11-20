@@ -647,7 +647,7 @@ export function useICloudRemote(activeRoom, enabled = true, turbo = false, video
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     if (keepRef.current) { clearInterval(keepRef.current); keepRef.current = null; }
     stopTurbo(); stopVideo();
-    if (videoRef.current) sendCmdRef.current('video', { text: 'off', room: cfgRef.current.room });   // stop the PC encoder promptly
+    if (videoRef.current) sendCmdRef.current('video', { text: 'off', room: activeRoomRef.current || cfgRef.current.room });   // stop the PC encoder promptly
     setConnected(false); setStatus(''); pushLog('info', 'disconnected');
   }, [pushLog, stopTurbo, stopVideo]);
 
@@ -683,7 +683,7 @@ export function useICloudRemote(activeRoom, enabled = true, turbo = false, video
     // tear down whatever was running
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     stopTurbo(); turboReset(); stopVideo(); videoReset();
-    if (wasV && !video) sendCmdRef.current('video', { text: 'off', room: cfgRef.current.room });   // leaving video → stop the PC encoder
+    if (wasV && !video) sendCmdRef.current('video', { text: 'off', room: activeRoomRef.current || cfgRef.current.room });   // leaving video → stop the PC encoder
     bufRef.current = []; lastTsRef.current = 0; liveRef.current = false;
     setFrame(null); setStatus('switching…');
     if (video) {
