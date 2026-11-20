@@ -55,6 +55,9 @@ const ICONS = {
   enter: ['M20 6v5a3 3 0 0 1-3 3H5', 'M9 10l-4 4 4 4'],
   back: ['M11 7l-5 5 5 5', 'M6 12h11a3 3 0 0 0 0-6h-2'],
   backspace: ['M9 5h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9L2 12z', 'M17 9l-5 6', 'M12 9l5 6'],
+  chevL: ['M15 6l-6 6 6 6'],
+  chevR: ['M9 6l6 6-6 6'],
+  close: ['M6 6l12 12', 'M18 6L6 18'],
   settings: ['M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M19 12a7 7 0 0 0-.1-1l2-1.6-2-3.4-2.3 1a7 7 0 0 0-1.7-1L16.5 3h-4l-.4 2.4a7 7 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.6a7 7 0 0 0 0 2l-2 1.6 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.4 2.4h4l.4-2.4a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.6a7 7 0 0 0 .1-1z'],
   check: ['M5 13l4 4 10-11'],
 };
@@ -556,7 +559,7 @@ export default function ICloudRemoteScreen() {
         {zoom > 1.01 ? (
           <Pressable style={s.resetZoom} onPress={() => applyZP(1, 0, 0)}><Text style={s.resetZoomTxt}>{Math.round(zoom * 100)}%  ✕</Text></Pressable>
         ) : null}
-        {/* ============ floating top pill — tap the mode chip to switch, ••• for everything else ============ */}
+        {/* ============ top bar — status + ALL controls live up here, so the bottom stays clear for typing ============ */}
         <Animated.View pointerEvents="box-none" style={[s.floatTop, { top: insets.top + 8, opacity: chromeOpacity }]}>
           <View style={s.floatTopInner}>
             <Pressable onPress={() => { showChrome(); setModePickOpen(true); }} style={s.modeChip} hitSlop={4}>
@@ -575,54 +578,54 @@ export default function ICloudRemoteScreen() {
               <Ico name="dots" size={18} color="#fff" />
             </Pressable>
           </View>
+          {/* control row — moved up from the bottom */}
+          <View style={[s.floatBottomInner, { marginTop: 8, alignSelf: 'center' }]}>
+            <FloatBtn s={s} icon="cursor" on={precision} onPress={() => { showChrome(); const n = !precision; setPrecision(n); showToast(n ? 'Precision on — fine control' : 'Precision off', 'wait'); }} />
+            <FloatBtn s={s} icon="hand" on={dragMode} onPress={() => { showChrome(); setDragMode((v) => !v); }} />
+            <FloatBtn s={s} icon="plus" onPress={() => { showChrome(); zoomBy(1.6); }} />
+            <FloatBtn s={s} icon="minus" onPress={() => { showChrome(); zoomBy(1 / 1.6); }} />
+            {mode !== 'web' ? <FloatBtn s={s} icon="screens" onPress={() => { showChrome(); setScreenPickOpen(true); }} /> : null}
+            {zoom > 1.01 ? (
+              <Pressable style={s.floatZoomChip} onPress={() => { showChrome(); applyZP(1, 0, 0); }}><Text style={s.floatZoomTxt}>{Math.round(zoom * 100)}%</Text></Pressable>
+            ) : null}
+          </View>
         </Animated.View>
 
-        {/* ============ Web mode: Chrome-style tab strip + address bar ============ */}
+        {/* ============ Web mode: address bar on top, tab switching on LEFT/RIGHT side rails (clear of the page) ====== */}
         {mode === 'web' && r.connected ? (
-          <Animated.View pointerEvents="box-none" style={[s.webBar, { top: insets.top + 56, opacity: chromeOpacity }]}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.webTabsRow} keyboardShouldPersistTaps="handled">
-              {(r.webTabs.tabs.length ? r.webTabs.tabs : [{ t: 'Tab' }]).map((tb, i) => (
-                <Pressable key={i} onPress={() => { showChrome(); r.webCmd('tab', String(i)); }} style={[s.webTab, i === r.webTabs.active && s.webTabOn]}>
-                  <Ico name="globe" size={13} color={i === r.webTabs.active ? '#fff' : 'rgba(235,235,245,0.6)'} sw={2} />
-                  <Text style={[s.webTabTxt, i === r.webTabs.active && { color: '#fff' }]} numberOfLines={1}>{tb.t || 'New tab'}</Text>
-                  {i === r.webTabs.active && r.webTabs.tabs.length > 1 ? (
-                    <Pressable hitSlop={8} onPress={() => { showChrome(); r.webCmd('tab', 'close'); }}><Ico name="back" size={13} color="rgba(255,255,255,0.7)" /></Pressable>
-                  ) : null}
-                </Pressable>
-              ))}
-              <Pressable onPress={() => { showChrome(); r.webCmd('tab', 'new'); }} style={s.webTabAdd}><Ico name="plus" size={16} color="#fff" /></Pressable>
-            </ScrollView>
-            <View style={s.webUrlRow}>
-              <TextInput
-                style={s.webUrlInput}
-                value={webUrl}
-                onChangeText={setWebUrl}
-                onFocus={showChrome}
-                placeholder="Search or type a URL"
-                placeholderTextColor="rgba(235,235,245,0.4)"
-                autoCapitalize="none" autoCorrect={false} returnKeyType="go" selectTextOnFocus
-                onSubmitEditing={() => { if (webUrl.trim()) { r.webCmd('nav', webUrl.trim()); setWebUrl(''); } }}
-              />
-              <Pressable style={s.webUrlGo} onPress={() => { if (webUrl.trim()) { r.webCmd('nav', webUrl.trim()); setWebUrl(''); } }}><Ico name="enter" size={18} color="#fff" /></Pressable>
-            </View>
-          </Animated.View>
+          <>
+            <Animated.View pointerEvents="box-none" style={[s.webUrlBar, { top: insets.top + 108, opacity: chromeOpacity }]}>
+              <View style={s.webUrlRow}>
+                <Ico name="globe" size={15} color="rgba(235,235,245,0.55)" />
+                <TextInput
+                  style={s.webUrlInput}
+                  value={webUrl}
+                  onChangeText={setWebUrl}
+                  onFocus={showChrome}
+                  placeholder={(r.webTabs.tabs[r.webTabs.active] && r.webTabs.tabs[r.webTabs.active].t) || 'Search or type a URL'}
+                  placeholderTextColor="rgba(235,235,245,0.45)"
+                  autoCapitalize="none" autoCorrect={false} returnKeyType="go" selectTextOnFocus
+                  onSubmitEditing={() => { if (webUrl.trim()) { r.webCmd('nav', webUrl.trim()); setWebUrl(''); } }}
+                />
+                <Pressable style={s.webUrlGo} onPress={() => { if (webUrl.trim()) { r.webCmd('nav', webUrl.trim()); setWebUrl(''); } }}><Ico name="enter" size={18} color="#fff" /></Pressable>
+              </View>
+            </Animated.View>
+            {r.webTabs.tabs.length > 1 ? (
+              <Animated.View pointerEvents="box-none" style={[s.webRailL, { opacity: chromeOpacity }]}>
+                <Pressable style={s.railBtn} onPress={() => { showChrome(); r.webCmd('tab', 'prev'); }}><Ico name="chevL" size={22} color="#fff" /></Pressable>
+                <Text style={s.railCount}>{(r.webTabs.active || 0) + 1}/{r.webTabs.tabs.length}</Text>
+              </Animated.View>
+            ) : null}
+            <Animated.View pointerEvents="box-none" style={[s.webRailR, { opacity: chromeOpacity }]}>
+              {r.webTabs.tabs.length > 1 ? <Pressable style={s.railBtn} onPress={() => { showChrome(); r.webCmd('tab', 'next'); }}><Ico name="chevR" size={22} color="#fff" /></Pressable> : null}
+              <Pressable style={[s.railBtn, s.railNew]} onPress={() => { showChrome(); r.webCmd('tab', 'new'); }}><Ico name="plus" size={20} color="#fff" /></Pressable>
+              {r.webTabs.tabs.length > 1 ? <Pressable style={s.railBtn} onPress={() => { showChrome(); r.webCmd('tab', 'close'); }}><Ico name="close" size={18} color="#fff" /></Pressable> : null}
+            </Animated.View>
+          </>
         ) : null}
 
-        {/* ============ bottom dock: control row (fades when idle) + a persistent typing bar that always works ============ */}
+        {/* ============ bottom: ONLY the typing bar — kept clear so typing is unobstructed ============ */}
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[s.bottomDock, { paddingBottom: insets.bottom + 10 }]} pointerEvents="box-none">
-          <Animated.View pointerEvents="box-none" style={{ opacity: chromeOpacity, alignItems: 'center' }}>
-            <View style={s.floatBottomInner}>
-              <FloatBtn s={s} icon="cursor" on={precision} onPress={() => { showChrome(); const n = !precision; setPrecision(n); showToast(n ? 'Precision on — fine control' : 'Precision off', 'wait'); }} />
-              <FloatBtn s={s} icon="hand" on={dragMode} onPress={() => { showChrome(); setDragMode((v) => !v); }} />
-              <FloatBtn s={s} icon="plus" onPress={() => { showChrome(); zoomBy(1.6); }} />
-              <FloatBtn s={s} icon="minus" onPress={() => { showChrome(); zoomBy(1 / 1.6); }} />
-              {mode !== 'web' ? <FloatBtn s={s} icon="screens" onPress={() => { showChrome(); setScreenPickOpen(true); }} /> : null}
-              {zoom > 1.01 ? (
-                <Pressable style={s.floatZoomChip} onPress={() => { showChrome(); applyZP(1, 0, 0); }}><Text style={s.floatZoomTxt}>{Math.round(zoom * 100)}%</Text></Pressable>
-              ) : null}
-              <FloatBtn s={s} icon="dots" wide onPress={() => { showChrome(); setMenuOpen(true); }} />
-            </View>
-          </Animated.View>
           <View style={s.typeBar}>
             <Pressable style={s.typeBack} onPress={() => { showChrome(); fire('key', { text: 'BACKSPACE' }, null, { label: 'Backspace' }); }} hitSlop={8}><Ico name="backspace" size={22} color="#fff" /></Pressable>
             <TextInput
@@ -921,7 +924,7 @@ const styles = (t) => {
     modeChipTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
     modeChipCaret: { color: 'rgba(255,255,255,0.55)', fontSize: 10 },
     floatStatusTxt: { flex: 1, color: 'rgba(255,255,255,0.72)', fontSize: 11, textAlign: 'center' },
-    bottomDock: { position: 'absolute', left: 0, right: 0, bottom: 0, alignItems: 'center', gap: 10 },
+    bottomDock: { position: 'absolute', left: 0, right: 0, bottom: 0, alignItems: 'center' },
     floatBottomInner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(10,10,12,0.9)', borderRadius: 999, padding: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' },
     floatBtn: { width: 44, height: 44, borderRadius: 999, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.08)' },
     floatBtnWide: { width: 54 },
@@ -934,16 +937,16 @@ const styles = (t) => {
     typeInput: { flex: 1, color: '#fff', fontSize: 16, paddingHorizontal: 8, paddingVertical: 9 },
     typeSend: { width: 46, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.18)' },
     typeEnter: { width: 52, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#5B6CFF' },
-    // Web mode: tab strip + address bar
-    webBar: { position: 'absolute', left: 10, right: 10, gap: 6 },
-    webTabsRow: { gap: 6, alignItems: 'center', paddingRight: 4 },
-    webTab: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 150, backgroundColor: 'rgba(22,22,26,0.82)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.12)' },
-    webTabOn: { backgroundColor: '#5B6CFF', borderColor: '#5B6CFF' },
-    webTabTxt: { color: 'rgba(235,235,245,0.7)', fontSize: 12, fontWeight: '600', flexShrink: 1 },
-    webTabAdd: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(22,22,26,0.82)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.12)' },
-    webUrlRow: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(22,22,26,0.92)', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 5, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.14)' },
-    webUrlInput: { flex: 1, color: '#fff', fontSize: 14, paddingHorizontal: 6, paddingVertical: 7 },
+    // Web mode: address bar (top) + tab switching on side rails (clear of the page content)
+    webUrlBar: { position: 'absolute', left: 10, right: 10 },
+    webUrlRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#000', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+    webUrlInput: { flex: 1, color: '#fff', fontSize: 14, paddingHorizontal: 2, paddingVertical: 7 },
     webUrlGo: { width: 40, height: 34, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#5B6CFF' },
+    webRailL: { position: 'absolute', left: 8, top: '42%', alignItems: 'center', gap: 6 },
+    webRailR: { position: 'absolute', right: 8, top: '38%', alignItems: 'center', gap: 8 },
+    railBtn: { width: 46, height: 46, borderRadius: 999, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(10,10,12,0.9)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+    railNew: { backgroundColor: '#5B6CFF', borderColor: '#5B6CFF' },
+    railCount: { color: '#fff', fontSize: 11, fontWeight: '700', backgroundColor: 'rgba(10,10,12,0.9)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, overflow: 'hidden' },
     // mode picker rows
     modeRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
     modeRowIcon: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: t.fill },
