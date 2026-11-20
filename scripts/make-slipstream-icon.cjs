@@ -24,27 +24,26 @@ function spline(pts) {
   return d;
 }
 
-const UPPER = [[0.085, 0.365], [0.33, 0.42], [0.50, 0.465], [0.67, 0.42], [0.72, 0.395]];
-const LOWER = [[0.085, 0.635], [0.33, 0.58], [0.50, 0.535], [0.67, 0.58], [0.72, 0.605]];
-
-// The white stream mark (two faint draft lines + bold lead line + arrowhead). posts=true adds the dark wall.
-function mark({ posts = false } = {}) {
-  const half = F(0.075) / 2;
-  const wall = posts ? `
-    <rect x="${F(0.50) - half}" y="${F(0.11)}" width="${F(0.075)}" height="${F(0.40) - F(0.11)}" rx="${F(0.0375)}" fill="#0B1222" fill-opacity="0.92"/>
-    <rect x="${F(0.50) - half}" y="${F(0.60)}" width="${F(0.075)}" height="${F(0.89) - F(0.60)}" rx="${F(0.0375)}" fill="#0B1222" fill-opacity="0.92"/>` : '';
-  const upper = `<path d="${spline(UPPER)}" fill="none" stroke="#FFFFFF" stroke-opacity="0.70" stroke-width="${F(0.040)}" stroke-linecap="round"/>`;
-  const lower = `<path d="${spline(LOWER)}" fill="none" stroke="#FFFFFF" stroke-opacity="0.70" stroke-width="${F(0.040)}" stroke-linecap="round"/>`;
-  const lead = `<line x1="${F(0.10)}" y1="${F(0.50)}" x2="${F(0.72)}" y2="${F(0.50)}" stroke="#FFFFFF" stroke-width="${F(0.075)}" stroke-linecap="round"/>`;
-  const arrow = `<polygon points="${F(0.88)},${F(0.50)} ${F(0.70)},${F(0.415)} ${F(0.70)},${F(0.585)}" fill="#FFFFFF"/>`;
-  return `${wall}${upper}${lower}${lead}${arrow}`;
+// Clean remote-desktop mark: a white rounded monitor with a play glyph (the indigo showing through) and a
+// stand — "stream / control your computer." `grad` true = cut the play from the gradient (for the full icon),
+// false = cut it in a flat indigo (for transparent marks). Reads clearly even at home-screen size.
+function mark({ grad = false } = {}) {
+  const sx = F(0.17), sy = F(0.235), sw = F(0.66), sh = F(0.44), sr = F(0.075);   // screen rect
+  const cut = grad ? 'url(#bg)' : '#4759E6';
+  // play triangle centred in the screen
+  const cxP = F(0.50), cyP = sy + sh / 2, pw = F(0.085), ph = F(0.11);
+  const play = `<polygon points="${cxP - pw * 0.55},${cyP - ph} ${cxP - pw * 0.55},${cyP + ph} ${cxP + pw},${cyP}" fill="${cut}"/>`;
+  const screen = `<rect x="${sx}" y="${sy}" width="${sw}" height="${sh}" rx="${sr}" fill="#FFFFFF"/>`;
+  const neck = `<rect x="${F(0.50) - F(0.035)}" y="${sy + sh}" width="${F(0.07)}" height="${F(0.055)}" fill="#FFFFFF"/>`;
+  const base = `<rect x="${F(0.335)}" y="${F(0.75)}" width="${F(0.33)}" height="${F(0.055)}" rx="${F(0.0275)}" fill="#FFFFFF"/>`;
+  return `${screen}${play}${neck}${base}`;
 }
 
 const iconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}" viewBox="0 0 ${S} ${S}">
   <defs><linearGradient id="bg" x1="0" y1="0" x2="${S}" y2="${S}" gradientUnits="userSpaceOnUse">
-    <stop offset="0" stop-color="#2456FF"/><stop offset="1" stop-color="#19D3E3"/></linearGradient></defs>
+    <stop offset="0" stop-color="#6D7BFF"/><stop offset="1" stop-color="#3A3AE0"/></linearGradient></defs>
   <rect width="${S}" height="${S}" fill="url(#bg)"/>
-  ${mark({ posts: true })}
+  ${mark({ grad: true })}
 </svg>`;
 
 // mark alone on transparent, scaled about the centre (splash / adaptive / notification)
@@ -54,7 +53,7 @@ const markSVG = (scale) => `<svg xmlns="http://www.w3.org/2000/svg" width="${S}"
 (async () => {
   const out = path.join(path.resolve(__dirname, '..'), 'assets', 'images');
   // iOS/App Store icon: full-bleed, NO alpha channel.
-  await sharp(Buffer.from(iconSVG)).resize(S, S).flatten({ background: '#1E48D8' }).png().toFile(path.join(out, 'icon.png'));
+  await sharp(Buffer.from(iconSVG)).resize(S, S).flatten({ background: '#4040E0' }).png().toFile(path.join(out, 'icon.png'));
   // Splash: the mark alone on transparent (app.json paints the navy behind it).
   await sharp(Buffer.from(markSVG(0.86))).resize(S, S).png().toFile(path.join(out, 'splash-icon.png'));
   // Android adaptive foreground: mark in the safe zone on transparent.

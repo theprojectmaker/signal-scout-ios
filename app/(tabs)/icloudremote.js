@@ -35,6 +35,37 @@ const NAMES = { click: 'Click', dblclick: 'Double-click', rightclick: 'Right-cli
 const PIC_LABEL = { fast: 'Fast (fastest)', clear: 'Clear (sharper)', text: 'Text (crisp code)' };
 const TQ_LABEL = { 0: 'Best (adapts to the link)', 2: 'Smooth (smaller, steadier)', 4: 'Fastest (smallest)' };
 const MARK_COLOR = { sending: '#0A84FF', sent: '#FF9F0A', unconfirmed: '#FF9F0A', done: '#30D158', failed: '#FF453B', timeout: '#FF453B' };
+
+// Clean line icons (24×24, stroke) — replaces every emoji so the UI reads like a real remote-desktop app,
+// not a panel of emoji. Each entry is one or more SVG path `d` strings, stroked (not filled).
+const ICONS = {
+  monitor: ['M3 5h18v11H3z', 'M9 20h6', 'M12 16v4'],
+  bolt: ['M13 3 4 14h6l-1 7 9-11h-6z'],
+  film: ['M4 4h16v16H4z', 'M4 9h16', 'M4 15h16', 'M9 4v16', 'M15 4v16'],
+  globe: ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z', 'M3 12h18', 'M12 3c2.5 2.5 2.5 15 0 18', 'M12 3c-2.5 2.5-2.5 15 0 18'],
+  keyboard: ['M3 6h18v12H3z', 'M7 10h.01', 'M11 10h.01', 'M15 10h.01', 'M7 14h10'],
+  cursor: ['M5 3l5 16 2-6 6-2z'],
+  hand: ['M8 11V5a1.5 1.5 0 0 1 3 0v5', 'M11 10V4a1.5 1.5 0 0 1 3 0v6', 'M14 10V6a1.5 1.5 0 0 1 3 0v8a6 6 0 0 1-6 6h-1a6 6 0 0 1-4.5-2L5 15a1.5 1.5 0 0 1 2.3-1.9L8 14'],
+  plus: ['M12 5v14', 'M5 12h14'],
+  minus: ['M5 12h14'],
+  dots: ['M5 12h.01', 'M12 12h.01', 'M19 12h.01'],
+  screens: ['M3 5h12v9H3z', 'M9 18h4', 'M17 9h4v8h-6v-5'],
+  refresh: ['M20 11a8 8 0 1 0-1 5', 'M20 5v6h-6'],
+  send: ['M4 12l16-7-7 16-2-7z'],
+  enter: ['M20 6v5a3 3 0 0 1-3 3H5', 'M9 10l-4 4 4 4'],
+  back: ['M11 7l-5 5 5 5', 'M6 12h11a3 3 0 0 0 0-6h-2'],
+  settings: ['M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M19 12a7 7 0 0 0-.1-1l2-1.6-2-3.4-2.3 1a7 7 0 0 0-1.7-1L16.5 3h-4l-.4 2.4a7 7 0 0 0-1.7 1l-2.3-1-2 3.4 2 1.6a7 7 0 0 0 0 2l-2 1.6 2 3.4 2.3-1a7 7 0 0 0 1.7 1l.4 2.4h4l.4-2.4a7 7 0 0 0 1.7-1l2.3 1 2-3.4-2-1.6a7 7 0 0 0 .1-1z'],
+  check: ['M5 13l4 4 10-11'],
+};
+function Ico({ name, size = 20, color = '#fff', sw = 2 }) {
+  const paths = ICONS[name] || [];
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      {paths.map((d, i) => <Path key={i} d={d} stroke={color} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" />)}
+    </Svg>
+  );
+}
+const MODE_ICON = { computer: 'monitor', turbo: 'bolt', video: 'film', web: 'globe' };
 const shortErr = (s) => String(s || '').replace(/^CloudKit \d+:\s*/, '').slice(0, 70);
 const MAX_ZOOM = 6;
 
@@ -429,7 +460,7 @@ export default function ICloudRemoteScreen() {
     ? (stale ? `frozen ${frameAgeS}s — check the PC bridge` : (frameAgeS <= 2 ? (fps >= 2 ? `Live · ${fps} fps` : 'Live') : `Live · ${frameAgeS}s`))
     : r.connected ? (errish ? 'can’t reach CloudKit' : 'waiting for your PC…') : 'not connected';
 
-  const modeInfo = { computer: ['🖥', 'Computer'], turbo: ['⚡', 'Turbo β'], video: ['🎬', 'Video β'], web: ['🌐', 'Web'] }[mode];
+  const modeLabel = { computer: 'Computer', turbo: 'Turbo', video: 'Video', web: 'Web' }[mode];
   const videoLive = isVideo && r.connected && vidPlaying;
   useEffect(() => { if (!isVideo) setVidPlaying(false); }, [isVideo]);
 
@@ -528,8 +559,9 @@ export default function ICloudRemoteScreen() {
           <View style={s.floatTopInner}>
             <Pressable onPress={() => { showChrome(); setModePickOpen(true); }} style={s.modeChip} hitSlop={4}>
               <View style={[s.dot, { backgroundColor: dotColor }]} />
-              <Text style={s.modeChipTxt} numberOfLines={1}>{modeInfo[0]} {modeInfo[1]}</Text>
-              <Text style={s.modeChipCaret}>▾</Text>
+              <Ico name={MODE_ICON[mode]} size={16} color="#fff" />
+              <Text style={s.modeChipTxt} numberOfLines={1}>{modeLabel}</Text>
+              <Svg width={12} height={12} viewBox="0 0 24 24" fill="none"><Path d="M6 9l6 6 6-6" stroke="rgba(255,255,255,0.6)" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" /></Svg>
             </Pressable>
             <Text
               style={[s.floatStatusTxt, toast && { color: toast.tone === 'bad' ? t.red : toast.tone === 'ok' ? t.green : t.label, fontWeight: '700' }]}
@@ -538,25 +570,42 @@ export default function ICloudRemoteScreen() {
               {toast ? toast.text : sub}
             </Text>
             <Pressable onPress={() => { showChrome(); setMenuOpen(true); }} hitSlop={10} style={s.menuBtn}>
-              <Text style={s.menuDots}>•••</Text>
+              <Ico name="dots" size={18} color="#fff" />
             </Pressable>
           </View>
         </Animated.View>
 
-        {/* ============ floating bottom pill — the few controls used constantly; everything else lives in ••• ============ */}
-        <Animated.View pointerEvents="box-none" style={[s.floatBottom, { bottom: insets.bottom + 14, opacity: chromeOpacity }]}>
-          <View style={s.floatBottomInner}>
-            <FloatBtn s={s} glyph="⌨" onPress={() => { showChrome(); setKbOpen(true); }} />
-            <FloatBtn s={s} glyph="◎" on={precision} onPress={() => { showChrome(); const n = !precision; setPrecision(n); showToast(n ? 'Precision on — fine trackpad control' : 'Precision off', 'wait'); }} />
-            <FloatBtn s={s} glyph="✋" on={dragMode} onPress={() => { showChrome(); setDragMode((v) => !v); }} />
-            {zoom > 1.01 ? (
-              <Pressable style={s.floatZoomChip} onPress={() => { showChrome(); applyZP(1, 0, 0); }}>
-                <Text style={s.floatZoomTxt}>{Math.round(zoom * 100)}%  ✕</Text>
-              </Pressable>
-            ) : null}
-            <FloatBtn s={s} glyph="•••" wide onPress={() => { showChrome(); setMenuOpen(true); }} />
+        {/* ============ bottom dock: control row (fades when idle) + a persistent typing bar that always works ============ */}
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[s.bottomDock, { paddingBottom: insets.bottom + 10 }]} pointerEvents="box-none">
+          <Animated.View pointerEvents="box-none" style={{ opacity: chromeOpacity, alignItems: 'center' }}>
+            <View style={s.floatBottomInner}>
+              <FloatBtn s={s} icon="cursor" on={precision} onPress={() => { showChrome(); const n = !precision; setPrecision(n); showToast(n ? 'Precision on — fine control' : 'Precision off', 'wait'); }} />
+              <FloatBtn s={s} icon="hand" on={dragMode} onPress={() => { showChrome(); setDragMode((v) => !v); }} />
+              <FloatBtn s={s} icon="plus" onPress={() => { showChrome(); zoomBy(1.6); }} />
+              <FloatBtn s={s} icon="minus" onPress={() => { showChrome(); zoomBy(1 / 1.6); }} />
+              {mode !== 'web' ? <FloatBtn s={s} icon="screens" onPress={() => { showChrome(); setScreenPickOpen(true); }} /> : null}
+              {zoom > 1.01 ? (
+                <Pressable style={s.floatZoomChip} onPress={() => { showChrome(); applyZP(1, 0, 0); }}><Text style={s.floatZoomTxt}>{Math.round(zoom * 100)}%</Text></Pressable>
+              ) : null}
+              <FloatBtn s={s} icon="dots" wide onPress={() => { showChrome(); setMenuOpen(true); }} />
+            </View>
+          </Animated.View>
+          <View style={s.typeBar}>
+            <Pressable style={s.typeIcon} onPress={() => { showChrome(); fire('key', { text: 'BACKSPACE' }, null, { label: 'Backspace' }); }} hitSlop={8}><Ico name="back" size={20} color={t.label} /></Pressable>
+            <TextInput
+              style={s.typeInput}
+              value={barText}
+              onChangeText={setBarText}
+              onFocus={showChrome}
+              placeholder="Type to your PC…"
+              placeholderTextColor="rgba(235,235,245,0.4)"
+              autoCapitalize="none" autoCorrect={false} returnKeyType="send" blurOnSubmit={false}
+              onSubmitEditing={() => { if (barText) fire('type', { text: barText }, null, { label: 'Typing' }); fire('key', { text: 'ENTER' }, null, { label: 'Enter' }); setBarText(''); }}
+            />
+            <Pressable style={s.typeSend} onPress={() => { if (barText) { fire('type', { text: barText }, null, { label: 'Typing' }); setBarText(''); } }}><Ico name="send" size={20} color="#fff" /></Pressable>
+            <Pressable style={s.typeEnter} onPress={() => { if (barText) fire('type', { text: barText }, null, { label: 'Typing' }); fire('key', { text: 'ENTER' }, null, { label: 'Enter' }); setBarText(''); }}><Ico name="enter" size={20} color="#fff" /></Pressable>
           </View>
-        </Animated.View>
+        </KeyboardAvoidingView>
       </View>
 
       {/* ============ mode picker ============ */}
@@ -564,9 +613,14 @@ export default function ICloudRemoteScreen() {
         <Pressable style={s.keysBackdrop} onPress={() => setModePickOpen(false)}>
           <Pressable style={s.keysCard} onPress={() => {}}>
             <View style={s.sheetHead}><Text style={s.sheetTitle}>Switch to</Text><Pressable onPress={() => setModePickOpen(false)} hitSlop={8}><Text style={s.sheetDone}>Done</Text></Pressable></View>
-            {[['computer', '🖥  Computer'], ['turbo', '⚡  Turbo β'], ['video', '🎬  Video β'], ['web', '🌐  Web']].map(([m, label]) => (
-              <Pressable key={m} style={s.screenRow} onPress={() => { setModePickOpen(false); setMode(m); }}>
-                <Text style={[s.screenRowTxt, mode === m && { color: t.blue, fontWeight: '700' }]}>{label}{mode === m ? '   ✓' : ''}</Text>
+            {[['computer', 'Computer', 'Classic frames'], ['turbo', 'Turbo', 'Delta tiles · sharp'], ['video', 'Video', 'H.264 · smooth'], ['web', 'Web', 'Browser on the PC']].map(([m, label, hint]) => (
+              <Pressable key={m} style={s.modeRow} onPress={() => { setModePickOpen(false); setMode(m); }}>
+                <View style={[s.modeRowIcon, mode === m && { backgroundColor: t.blue }]}><Ico name={MODE_ICON[m]} size={18} color={mode === m ? '#fff' : t.label} /></View>
+                <View style={s.flex}>
+                  <Text style={[s.modeRowTxt, mode === m && { color: t.blue, fontWeight: '700' }]}>{label}</Text>
+                  <Text style={s.modeRowHint}>{hint}</Text>
+                </View>
+                {mode === m ? <Ico name="check" size={18} color={t.blue} /> : null}
               </Pressable>
             ))}
           </Pressable>
@@ -668,13 +722,15 @@ export default function ICloudRemoteScreen() {
           <Pressable style={s.keysCard} onPress={() => {}}>
             <View style={s.sheetHead}><Text style={s.sheetTitle}>Screens</Text><Pressable onPress={() => setScreenPickOpen(false)} hitSlop={8}><Text style={s.sheetDone}>Done</Text></Pressable></View>
             <Text style={s.fieldHint}>Pick a monitor to view, or see them all at once. Options past your monitor count simply do nothing.</Text>
-            {[['0', '🖥  Screen 1'], ['1', '🖥  Screen 2'], ['2', '🖥  Screen 3'], ['full', '⊞  Both — all screens at once']].map(([v, label]) => (
-              <Pressable key={v} style={s.screenRow} onPress={() => { setScreenPickOpen(false); fire('view', { text: v }, null, { label: label.replace(/^[^ ]+\s+/, '') }); }}>
-                <Text style={s.screenRowTxt}>{label}</Text>
+            {[['0', 'monitor', 'Screen 1'], ['1', 'monitor', 'Screen 2'], ['2', 'monitor', 'Screen 3'], ['full', 'screens', 'All screens at once']].map(([v, icon, label]) => (
+              <Pressable key={v} style={s.modeRow} onPress={() => { setScreenPickOpen(false); fire('view', { text: v }, null, { label }); }}>
+                <View style={s.modeRowIcon}><Ico name={icon} size={18} color={t.label} /></View>
+                <Text style={s.modeRowTxt}>{label}</Text>
               </Pressable>
             ))}
-            <Pressable style={[s.screenRow, { borderBottomWidth: 0 }]} onPress={() => { setScreenPickOpen(false); fire('view', {}, null, { label: 'Next screen' }); }}>
-              <Text style={[s.screenRowTxt, { color: t.blue }]}>↻  Next screen</Text>
+            <Pressable style={s.modeRow} onPress={() => { setScreenPickOpen(false); fire('view', {}, null, { label: 'Next screen' }); }}>
+              <View style={s.modeRowIcon}><Ico name="refresh" size={18} color={t.blue} /></View>
+              <Text style={[s.modeRowTxt, { color: t.blue }]}>Next screen</Text>
             </Pressable>
           </Pressable>
         </Pressable>
@@ -796,10 +852,10 @@ function DockBtn({ s, glyph, label, onPress, on }) {
     </Pressable>
   );
 }
-function FloatBtn({ s, glyph, onPress, on, wide }) {
+function FloatBtn({ s, icon, onPress, on, wide }) {
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [s.floatBtn, wide && s.floatBtnWide, on && s.floatBtnOn, pressed && { opacity: 0.6 }]}>
-      <Text style={[s.floatBtnGlyph, on && s.floatBtnOnTxt]}>{glyph}</Text>
+      <Ico name={icon} size={20} color="#fff" />
     </Pressable>
   );
 }
@@ -832,15 +888,24 @@ const styles = (t) => {
     modeChipTxt: { color: '#fff', fontSize: 13, fontWeight: '700' },
     modeChipCaret: { color: 'rgba(255,255,255,0.55)', fontSize: 10 },
     floatStatusTxt: { flex: 1, color: 'rgba(255,255,255,0.72)', fontSize: 11, textAlign: 'center' },
-    floatBottom: { position: 'absolute', alignSelf: 'center' },
-    floatBottomInner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(28,28,30,0.72)', borderRadius: 999, padding: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.12)' },
+    bottomDock: { position: 'absolute', left: 0, right: 0, bottom: 0, alignItems: 'center', gap: 10 },
+    floatBottomInner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(22,22,26,0.82)', borderRadius: 999, padding: 6, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.14)' },
     floatBtn: { width: 44, height: 44, borderRadius: 999, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.08)' },
     floatBtnWide: { width: 54 },
-    floatBtnOn: { backgroundColor: '#0A84FF' },
-    floatBtnGlyph: { color: '#fff', fontSize: 18 },
-    floatBtnOnTxt: { color: '#fff' },
+    floatBtnOn: { backgroundColor: '#5B6CFF' },
     floatZoomChip: { backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 999, paddingHorizontal: 12, height: 44, alignItems: 'center', justifyContent: 'center' },
     floatZoomTxt: { color: '#fff', fontSize: 12, fontWeight: '700' },
+    // persistent typing bar — always visible, backspace / type / send / enter all wired to the PC
+    typeBar: { flexDirection: 'row', alignItems: 'center', gap: 8, width: '92%', maxWidth: 560, backgroundColor: 'rgba(22,22,26,0.92)', borderRadius: 16, paddingHorizontal: 8, paddingVertical: 7, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.14)' },
+    typeIcon: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.08)' },
+    typeInput: { flex: 1, color: '#fff', fontSize: 16, paddingHorizontal: 6, paddingVertical: 8 },
+    typeSend: { width: 42, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.14)' },
+    typeEnter: { width: 48, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#5B6CFF' },
+    // mode picker rows
+    modeRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+    modeRowIcon: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: t.fill },
+    modeRowTxt: { color: t.label, fontSize: 16, fontWeight: '600' },
+    modeRowHint: { color: t.label3, fontSize: 12, marginTop: 1 },
     frame: { width: '100%', height: '100%' },
     dock: { backgroundColor: t.bg, flexGrow: 0 },
     dockRow: { paddingHorizontal: 10, paddingVertical: 7, gap: 7, alignItems: 'center' },
@@ -875,7 +940,7 @@ const styles = (t) => {
 
     emptyTitle: { color: '#e6e6e6', fontSize: 17, fontWeight: '700', marginTop: 6, textAlign: 'center' },
     emptyHint: { color: '#8a8a8a', fontSize: 12, textAlign: 'center', lineHeight: 17, maxWidth: 280 },
-    emptyCode: { color: '#9bd94e', fontSize: 13, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginTop: 2 },
+    emptyCode: { color: '#8aa0ff', fontSize: 13, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', marginTop: 2 },
     emptyErr: { color: '#ff6b60', fontSize: 12, textAlign: 'center', lineHeight: 17, maxWidth: 300 },
     emptyMeta: { color: '#6a6a6a', fontSize: 11, marginTop: 10 },
     emptyWarn: { color: '#e0b45a', fontSize: 12, textAlign: 'center', lineHeight: 17, maxWidth: 300, marginTop: 12 },
