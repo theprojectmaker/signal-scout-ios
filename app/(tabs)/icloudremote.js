@@ -101,6 +101,7 @@ export default function ICloudRemoteScreen() {
   const precisionRef = useRef(false);
   useEffect(() => { precisionRef.current = precision; }, [precision]);
   const [modePickOpen, setModePickOpen] = useState(false);
+  const [webUrl, setWebUrl] = useState('');
 
   // ---------- Chrome Remote Desktop-style immersive canvas ----------
   // The picture fills the whole screen; a top status pill and a bottom control pill float over it and
@@ -575,6 +576,37 @@ export default function ICloudRemoteScreen() {
           </View>
         </Animated.View>
 
+        {/* ============ Web mode: Chrome-style tab strip + address bar ============ */}
+        {mode === 'web' && r.connected ? (
+          <Animated.View pointerEvents="box-none" style={[s.webBar, { top: insets.top + 56, opacity: chromeOpacity }]}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.webTabsRow} keyboardShouldPersistTaps="handled">
+              {(r.webTabs.tabs.length ? r.webTabs.tabs : [{ t: 'Tab' }]).map((tb, i) => (
+                <Pressable key={i} onPress={() => { showChrome(); r.webCmd('tab', String(i)); }} style={[s.webTab, i === r.webTabs.active && s.webTabOn]}>
+                  <Ico name="globe" size={13} color={i === r.webTabs.active ? '#fff' : 'rgba(235,235,245,0.6)'} sw={2} />
+                  <Text style={[s.webTabTxt, i === r.webTabs.active && { color: '#fff' }]} numberOfLines={1}>{tb.t || 'New tab'}</Text>
+                  {i === r.webTabs.active && r.webTabs.tabs.length > 1 ? (
+                    <Pressable hitSlop={8} onPress={() => { showChrome(); r.webCmd('tab', 'close'); }}><Ico name="back" size={13} color="rgba(255,255,255,0.7)" /></Pressable>
+                  ) : null}
+                </Pressable>
+              ))}
+              <Pressable onPress={() => { showChrome(); r.webCmd('tab', 'new'); }} style={s.webTabAdd}><Ico name="plus" size={16} color="#fff" /></Pressable>
+            </ScrollView>
+            <View style={s.webUrlRow}>
+              <TextInput
+                style={s.webUrlInput}
+                value={webUrl}
+                onChangeText={setWebUrl}
+                onFocus={showChrome}
+                placeholder="Search or type a URL"
+                placeholderTextColor="rgba(235,235,245,0.4)"
+                autoCapitalize="none" autoCorrect={false} returnKeyType="go" selectTextOnFocus
+                onSubmitEditing={() => { if (webUrl.trim()) { r.webCmd('nav', webUrl.trim()); setWebUrl(''); } }}
+              />
+              <Pressable style={s.webUrlGo} onPress={() => { if (webUrl.trim()) { r.webCmd('nav', webUrl.trim()); setWebUrl(''); } }}><Ico name="enter" size={18} color="#fff" /></Pressable>
+            </View>
+          </Animated.View>
+        ) : null}
+
         {/* ============ bottom dock: control row (fades when idle) + a persistent typing bar that always works ============ */}
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[s.bottomDock, { paddingBottom: insets.bottom + 10 }]} pointerEvents="box-none">
           <Animated.View pointerEvents="box-none" style={{ opacity: chromeOpacity, alignItems: 'center' }}>
@@ -901,6 +933,16 @@ const styles = (t) => {
     typeInput: { flex: 1, color: '#fff', fontSize: 16, paddingHorizontal: 6, paddingVertical: 8 },
     typeSend: { width: 42, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.14)' },
     typeEnter: { width: 48, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: '#5B6CFF' },
+    // Web mode: tab strip + address bar
+    webBar: { position: 'absolute', left: 10, right: 10, gap: 6 },
+    webTabsRow: { gap: 6, alignItems: 'center', paddingRight: 4 },
+    webTab: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: 150, backgroundColor: 'rgba(22,22,26,0.82)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.12)' },
+    webTabOn: { backgroundColor: '#5B6CFF', borderColor: '#5B6CFF' },
+    webTabTxt: { color: 'rgba(235,235,245,0.7)', fontSize: 12, fontWeight: '600', flexShrink: 1 },
+    webTabAdd: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(22,22,26,0.82)', borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.12)' },
+    webUrlRow: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(22,22,26,0.92)', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 5, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(255,255,255,0.14)' },
+    webUrlInput: { flex: 1, color: '#fff', fontSize: 14, paddingHorizontal: 6, paddingVertical: 7 },
+    webUrlGo: { width: 40, height: 34, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#5B6CFF' },
     // mode picker rows
     modeRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
     modeRowIcon: { width: 38, height: 38, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: t.fill },

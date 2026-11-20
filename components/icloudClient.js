@@ -171,6 +171,7 @@ export function useICloudRemote(activeRoom, enabled = true, turbo = false, video
   const vidFetchRef = useRef(0);
   const vidStat = useRef({ segs: 0, bytes: 0, idxMs: [], aliveAt: 0, t0: Date.now() });
   const [videoInfo, setVideoInfo] = useState({ fps: 0, kbs: 0, rtt: 0, aliveAt: 0, playing: false });
+  const [webTabs, setWebTabs] = useState({ tabs: [], active: 0 });   // the PC browser's open tabs (Web mode)
 
   // ---- in-app event log (so a failure is diagnosable without a cable) ----
   const logRef = useRef([]);
@@ -703,6 +704,23 @@ export function useICloudRemote(activeRoom, enabled = true, turbo = false, video
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turbo, video]);
 
+  // Web mode: poll the PC browser's tab list (tabs-WEB record) so the app can show a tab strip.
+  useEffect(() => {
+    if (!connected || (activeRoom !== 'WEB')) { setWebTabs({ tabs: [], active: 0 }); return undefined; }
+    let stop = false;
+    const tick = async () => {
+      if (stop) return;
+      try {
+        const recs = await backendLookup({ ...cfgRef.current, room: 'WEB' }, ['tabs-WEB']);
+        const r0 = recs && recs[0];
+        if (r0 && r0.jpeg) { try { const j = JSON.parse(r0.jpeg); if (Array.isArray(j.tabs)) setWebTabs({ tabs: j.tabs, active: j.a || 0 }); } catch (e) {} }
+      } catch (e) {}
+      if (!stop) setTimeout(tick, 1500);
+    };
+    tick();
+    return () => { stop = true; };
+  }, [connected, activeRoom]);
+
   useEffect(() => () => {
     if (pollRef.current) clearInterval(pollRef.current);
     if (keepRef.current) clearInterval(keepRef.current);
@@ -714,6 +732,7 @@ export function useICloudRemote(activeRoom, enabled = true, turbo = false, video
     native: hasNativeCK, signedIn: hasNativeCK || !!cfg.webAuthToken,
     turbo: !!turbo, turboView, turboInfo,
     video: !!video, videoSinkRef, videoInfo, setVideoStat: setVideoInfo,
+    webTabs, webCmd: (kind, text) => sendCmd(kind, { text, room: 'WEB' }),
     repaint: () => sendCmd(videoRef.current ? 'vr' : 'tr'),
     setCfg, connect, disconnect, sendCmd, requestShot: () => sendCmd('shot'),
     beginSignIn, completeSignIn,

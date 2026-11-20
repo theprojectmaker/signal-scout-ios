@@ -83,11 +83,10 @@ export function applyMsg(a, m) {
     const cols = Math.ceil((m.W || a.W) / T);
     const tiles = new Set();
     for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) tiles.add(ty * cols + tx);
-    for (const t of tiles) {
-      const old = a.owner.get(t);
-      if (old != null) { const r = a.rects.get(old); if (r) { r.tiles.delete(t); if (!r.tiles.size) a.rects.delete(old); } }
-      a.owner.set(t, id);
-    }
+    // Record the newest owner per tile, but DON'T remove the old rect's image yet — a newer rect paints ON TOP
+    // (higher id renders last), so keeping the old one underneath until the new one has decoded prevents the
+    // one-frame flash of the blurry base showing through (the flicker on just-updated text). Pruned below.
+    for (const t of tiles) a.owner.set(t, id);
     a.rects.set(id, { id, x: m.x, y: m.y, w: m.w, h: m.h, uri: 'data:image/jpeg;base64,' + m.j, tiles });
     a.W = m.W || a.W; a.H = m.H || a.H; a.rev++;
     return true;
@@ -95,6 +94,24 @@ export function applyMsg(a, m) {
   return false;
 }
 
+// A rect is fully HIDDEN once every tile it painted is owned by a newer rect. Prune hidden rects a few commits
+// after they're covered (the double-buffer grace, so the new image has painted) and hard-cap total rects so an
+// old or scrolling screen can't accumulate unbounded <Image> layers.
+function pruneRects(a) {
+  const now = a.clock = (a.clock || 0) + 1;   // one tick per render commit, so the grace is measured in paints
+  for (const r of a.rects.values()) {
+    let hidden = true;
+    for (const t of r.tiles) { if (a.owner.get(t) === r.id) { hidden = false; break; } }
+    if (hidden) { if (!r.hiddenAt) r.hiddenAt = now; } else r.hiddenAt = 0;
+  }
+  for (const r of a.rects.values()) if (r.hiddenAt && now - r.hiddenAt >= 2) a.rects.delete(r.id);   // ~2 commits of overlap
+  if (a.rects.size > 180) {                                   // safety cap (fast scrolling)
+    const arr = [...a.rects.values()].sort((x, y) => x.id - y.id);
+    for (const r of arr) { if (a.rects.size <= 180) break; let hid = true; for (const t of r.tiles) { if (a.owner.get(t) === r.id) { hid = false; break; } } if (hid) a.rects.delete(r.id); }
+  }
+}
+
 export function snapshot(a) {
+  pruneRects(a);
   return { rev: a.rev, base: a.base, rects: [...a.rects.values()].sort((x, y) => x.id - y.id), W: a.W, H: a.H };
 }
