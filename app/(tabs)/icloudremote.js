@@ -12,6 +12,7 @@ import * as Updates from 'expo-updates';
 import { useTheme } from '../../components/theme';
 import { useICloudRemote, newRoom } from '../../components/icloudClient';
 import TurboCanvas from '../../components/TurboCanvas';
+import VideoCanvas from '../../components/VideoCanvas';
 
 // Captures the ckWebAuthToken whether CloudKit returns it in the URL or via postMessage.
 const CAPTURE_JS = `(function(){
@@ -45,8 +46,14 @@ export default function ICloudRemoteScreen() {
   const [mode, setMode] = useState('computer');   // 'computer' = your PC (classic) · 'turbo' = your PC (delta-tile engine, beta) · 'web' = the iCloud web browser (room WEB)
   // All three ride CloudKit. Computer and Turbo are the SAME room (your PC) read two different ways; Web is the
   // browser agent's room. Switching Computer <-> Turbo keeps the connection and just swaps the reader.
-  const r = useICloudRemote(mode === 'web' ? 'WEB' : null, true, mode === 'turbo');
+  const r = useICloudRemote(mode === 'web' ? 'WEB' : null, true, mode === 'turbo', mode === 'video');
   const isTurbo = mode === 'turbo';
+  const isVideo = mode === 'video';
+  const [vidPlaying, setVidPlaying] = useState(false);
+  const onVidStat = useCallback((m) => {
+    if (m.t === 'playing') setVidPlaying(true);
+    else if (m.t === 'err' || m.t === 'boot') { if (m.t === 'err' && m.m) r.pushLog && r.pushLog('error', 'video player: ' + m.m); }
+  }, [r]);
   const [boxDim, setBoxDim] = useState({ w: 0, h: 0 });   // layout size as STATE so rotating the iPad redraws the Turbo canvas
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -393,9 +400,11 @@ export default function ICloudRemoteScreen() {
   // A cached frame (shown instantly on reopen, before the stream resumes) isn't "stale" — it's the
   // last screen while we reconnect. Only live frames get an age / stale check.
   const turboLive = isTurbo && !!(r.turboView && r.turboView.base);
-  const cachedOnly = !!(r.frame && r.frame.cached) && !turboLive;
-  // Turbo is silent while the screen is still, so "age" there means "how long since the PC's index last answered".
-  const frameAgeS = isTurbo
+  const cachedOnly = !!(r.frame && r.frame.cached) && !turboLive && !isVideo;
+  // Turbo/Video are index-driven, so "age" there = how long since the PC's index last answered.
+  const frameAgeS = isVideo
+    ? (r.videoInfo && r.videoInfo.aliveAt ? Math.max(0, Math.round((Date.now() - r.videoInfo.aliveAt) / 1000)) : null)
+    : isTurbo
     ? (turboLive && r.turboInfo.aliveAt ? Math.max(0, Math.round((Date.now() - r.turboInfo.aliveAt) / 1000)) : null)
     : (r.frame && !cachedOnly ? Math.max(0, Math.round((Date.now() - (r.frame.rxAt || r.frame.ts)) / 1000)) : null);
   const stale = frameAgeS != null && frameAgeS > 40;
@@ -409,8 +418,10 @@ export default function ICloudRemoteScreen() {
     setTyped('');
   };
 
-  const title = mode === 'web' ? 'Web browser' : isTurbo ? 'Turbo β' : (r.native ? 'iCloud Remote' : 'iCloud Remote · web');
-  const sub = cachedOnly
+  const title = mode === 'web' ? 'Web browser' : isVideo ? 'Video β' : isTurbo ? 'Turbo β' : (r.native ? 'iCloud Remote' : 'iCloud Remote · web');
+  const sub = isVideo
+    ? (!r.connected ? 'not connected' : videoLive ? (stale ? `no link for ${frameAgeS}s — check the PC bridge` : `Live · video · ${r.videoInfo.kbs} KB/s`) : (errish ? 'can’t reach CloudKit' : 'starting video…'))
+    : cachedOnly
     ? (r.connected ? 'reconnecting…' : 'tap to resume')
     : (isTurbo && turboLive)
     ? (stale ? `no link for ${frameAgeS}s — check the PC bridge` : `Live · ${r.turboInfo.fps} fps · ${r.turboInfo.kbs} KB/s`)
@@ -418,7 +429,9 @@ export default function ICloudRemoteScreen() {
     ? (stale ? `frozen ${frameAgeS}s — check the PC bridge` : (frameAgeS <= 2 ? (fps >= 2 ? `Live · ${fps} fps` : 'Live') : `Live · ${frameAgeS}s`))
     : r.connected ? (errish ? 'can’t reach CloudKit' : 'waiting for your PC…') : 'not connected';
 
-  const modeInfo = { computer: ['🖥', 'Computer'], turbo: ['⚡', 'Turbo β'], web: ['🌐', 'Web'] }[mode];
+  const modeInfo = { computer: ['🖥', 'Computer'], turbo: ['⚡', 'Turbo β'], video: ['🎬', 'Video β'], web: ['🌐', 'Web'] }[mode];
+  const videoLive = isVideo && r.connected && vidPlaying;
+  useEffect(() => { if (!isVideo) setVidPlaying(false); }, [isVideo]);
 
   return (
     <View style={s.safe}>
@@ -427,7 +440,20 @@ export default function ICloudRemoteScreen() {
         onLayout={(e) => { const w = e.nativeEvent.layout.width, h = e.nativeEvent.layout.height; box.current = { w, h }; setBoxDim({ w, h }); }}
         {...pan.panHandlers}
       >
-        {turboLive ? (
+        {isVideo && r.connected ? (
+          <>
+            <View style={[StyleSheet.absoluteFill, { transform: [{ translateX: off.x }, { translateY: off.y }, { scale: zoom }] }]} pointerEvents="none">
+              <VideoCanvas sinkRef={r.videoSinkRef} onStat={onVidStat} />
+            </View>
+            {!videoLive ? (
+              <View style={s.center} pointerEvents="none">
+                <ActivityIndicator color="#8a8a8a" />
+                <Text style={s.emptyTitle}>Starting video…</Text>
+                <Text style={s.emptyHint}>Decoding the H.264 stream from your PC. First picture takes a moment.</Text>
+              </View>
+            ) : null}
+          </>
+        ) : turboLive ? (
           <View style={[StyleSheet.absoluteFill, { transform: [{ translateX: off.x }, { translateY: off.y }, { scale: zoom }] }]} pointerEvents="none">
             <TurboCanvas view={r.turboView} boxW={boxDim.w} boxH={boxDim.h} />
           </View>
@@ -538,7 +564,7 @@ export default function ICloudRemoteScreen() {
         <Pressable style={s.keysBackdrop} onPress={() => setModePickOpen(false)}>
           <Pressable style={s.keysCard} onPress={() => {}}>
             <View style={s.sheetHead}><Text style={s.sheetTitle}>Switch to</Text><Pressable onPress={() => setModePickOpen(false)} hitSlop={8}><Text style={s.sheetDone}>Done</Text></Pressable></View>
-            {[['computer', '🖥  Computer'], ['turbo', '⚡  Turbo β'], ['web', '🌐  Web']].map(([m, label]) => (
+            {[['computer', '🖥  Computer'], ['turbo', '⚡  Turbo β'], ['video', '🎬  Video β'], ['web', '🌐  Web']].map(([m, label]) => (
               <Pressable key={m} style={s.screenRow} onPress={() => { setModePickOpen(false); setMode(m); }}>
                 <Text style={[s.screenRowTxt, mode === m && { color: t.blue, fontWeight: '700' }]}>{label}{mode === m ? '   ✓' : ''}</Text>
               </Pressable>
@@ -552,7 +578,7 @@ export default function ICloudRemoteScreen() {
         <Pressable style={s.menuBackdrop} onPress={() => setMenuOpen(false)}>
           <View style={[s.menuCard, { top: insets.top + 44, maxHeight: winH - insets.top - 110 }]}>
             <ScrollView bounces={false}>
-              <MenuItem s={s} label={isTurbo ? 'Repaint screen' : 'Refresh now'} onPress={doMenu(() => (isTurbo ? fire('tr', {}, null, { label: 'Repaint' }) : fire('shot', {}, null, { label: 'Refresh' })))} />
+              <MenuItem s={s} label={isVideo ? 'Restart video' : isTurbo ? 'Repaint screen' : 'Refresh now'} onPress={doMenu(() => (isVideo ? fire('vr', {}, null, { label: 'Restart video' }) : isTurbo ? fire('tr', {}, null, { label: 'Repaint' }) : fire('shot', {}, null, { label: 'Refresh' })))} />
               <MenuItem s={s} label="Type text…" onPress={doMenu(() => setKbOpen(true))} />
               <MenuItem s={s} label="Scroll up" onPress={doMenu(() => fire('wheel', { dy: -300 }, null, { label: 'Scroll up' }))} />
               <MenuItem s={s} label="Scroll down" onPress={doMenu(() => fire('wheel', { dy: 300 }, null, { label: 'Scroll down' }))} />
@@ -565,14 +591,19 @@ export default function ICloudRemoteScreen() {
               ) : (
                 <>
                   <MenuItem s={s} label="Screens…" onPress={doMenu(() => setScreenPickOpen(true))} />
-                  {isTurbo
+                  {isVideo
+                    ? <MenuItem s={s} label="Restart video" onPress={doMenu(() => fire('vr', {}, null, { label: 'Restart video' }))} />
+                    : isTurbo
                     ? <MenuItem s={s} label="Repaint screen" onPress={doMenu(() => fire('tr', {}, null, { label: 'Repaint' }))} />
                     : <MenuItem s={s} label="HD boost" onPress={doMenu(() => fire('hd', {}, null, { label: 'HD boost' }))} />}
                 </>
               )}
               {zoom > 1.01 ? <MenuItem s={s} label="Reset zoom" onPress={doMenu(() => applyZP(1, 0, 0))} /> : null}
               <MenuItem s={s} label="Gestures help" onPress={doMenu(() => showToast(mode === 'web' ? 'Tap the blue bar to type a URL · tap links · scroll with ▲▼ or a drag · pinch to zoom' : 'Move = mouse · tap = click · double-tap = double-click · hold = right-click · pinch = zoom · 2 fingers = pan', 'wait'))} />
-              {isTurbo ? (
+              {isVideo ? (
+                <MenuItem s={s} label={`Video quality: ${TQ_LABEL[r.cfg.videoQ || 0]}`} accent
+                  onPress={doMenu(() => { const order = [0, 2, 4]; const n = order[(order.indexOf(r.cfg.videoQ || 0) + 1) % 3]; r.setCfg({ videoQ: n }); fire('vq', { text: String(n) }, null, { label: `Quality: ${TQ_LABEL[n]}` }); })} />
+              ) : isTurbo ? (
                 <MenuItem s={s} label={`Turbo quality: ${TQ_LABEL[r.cfg.turboQ || 0]}`} accent
                   onPress={doMenu(() => { const order = [0, 2, 4]; const n = order[(order.indexOf(r.cfg.turboQ || 0) + 1) % 3]; r.setCfg({ turboQ: n }); fire('tq', { text: String(n) }, null, { label: `Quality: ${TQ_LABEL[n]}` }); })} />
               ) : (

@@ -31,6 +31,7 @@ const DEFAULT_CFG = {
   tokenManual: false,                     // true only if the user pasted a token in Settings
   packing: false,                         // ON = ask the PC to pack several frames per write (smoother)
   turboQ: 0,                              // Turbo quality floor: 0 = best the link allows … 4 = smallest/fastest
+  videoQ: 0,                              // Video β quality floor: 0 = best … 4 = smallest/fastest
 };
 
 const ckBase = (cfg, kind, op) => `https://api.apple-cloudkit.com/database/1/${encodeURIComponent(cfg.container)}/${encodeURIComponent(cfg.env || 'development')}/public/${kind}/${op}`;
@@ -123,7 +124,7 @@ export function newRoom() {
   return s;
 }
 
-export function useICloudRemote(activeRoom, enabled = true, turbo = false) {
+export function useICloudRemote(activeRoom, enabled = true, turbo = false, video = false) {
   // activeRoom overrides cfg.room (e.g. 'WEB' for the browser tab) without changing the saved desktop room,
   // so Computer and Web are two tabs over the same container/creds — just different mailbox rooms.
   const activeRoomRef = useRef(activeRoom || null);
@@ -159,6 +160,17 @@ export function useICloudRemote(activeRoom, enabled = true, turbo = false) {
   const tStat = useRef({ commits: 0, bytes: 0, idxMs: [], aliveAt: 0, t0: Date.now() });
   const [turboView, setTurboView] = useState(null);        // {rev, base, rects, W, H} → drawn by TurboCanvas
   const [turboInfo, setTurboInfo] = useState({ fps: 0, kbs: 0, rtt: 0, aliveAt: 0 });
+  // ---- Video β (H.264 over CloudKit) state ----
+  const videoRef = useRef(!!video);                        // current mode
+  const videoSinkRef = useRef(null);                       // VideoCanvas sets this: (obj)=>inject into the WebView
+  const vidTokenRef = useRef(0);                           // bump to stop the running video loop
+  const vidGenRef = useRef(-1);                            // current encoder generation (restarts on resync/quality change)
+  const vidChunksRef = useRef(new Map());                  // seg# -> { n, parts:Map(k->b64) }
+  const vidNextRef = useRef(0);                            // next segment number to deliver (in order)
+  const vidSlotTsRef = useRef(new Array(12).fill(0));      // newest ts seen per vid payload slot
+  const vidFetchRef = useRef(0);
+  const vidStat = useRef({ segs: 0, bytes: 0, idxMs: [], aliveAt: 0, t0: Date.now() });
+  const [videoInfo, setVideoInfo] = useState({ fps: 0, kbs: 0, rtt: 0, aliveAt: 0, playing: false });
 
   // ---- in-app event log (so a failure is diagnosable without a cable) ----
   const logRef = useRef([]);
@@ -207,7 +219,8 @@ export function useICloudRemote(activeRoom, enabled = true, turbo = false) {
       if (st === 'active') {
         if (connectedRef.current) {
           const c = cfgRef.current;
-          if (turboRef.current) { if (hasNativeCK || c.webAuthToken) { sendCmdRef.current('turbo', { text: 'on' }); sendCmdRef.current('tr'); } }   // back from the background: repaint from a fresh preview
+          if (videoRef.current) { if (hasNativeCK || c.webAuthToken) { sendCmdRef.current('video', { text: 'on' }); sendCmdRef.current('vr'); } }   // back from background: fresh keyframe + init
+          else if (turboRef.current) { if (hasNativeCK || c.webAuthToken) { sendCmdRef.current('turbo', { text: 'on' }); sendCmdRef.current('tr'); } }   // repaint from a fresh preview
           else { pollFrameRef.current(); if (hasNativeCK || c.webAuthToken) sendCmdRef.current('shot'); }
         }
       } else if (lastFrameObjRef.current) {
@@ -398,6 +411,108 @@ export function useICloudRemote(activeRoom, enabled = true, turbo = false) {
   }, [turboIndexOnce, fail, pushLog]);
   const stopTurbo = useCallback(() => { turboTokenRef.current++; }, []);
 
+  // ===================== VIDEO β: H.264 stream =====================
+  // Poll the tiny vid-ROOM-i* indexes + vid-ROOM-init; fetch changed payload chunks; reassemble each segment
+  // (k of n chunks) and hand the init (once per encoder generation) + segments IN ORDER to the WebView player,
+  // which hardware-decodes them via MSE. Segments are keyframe-led, so a missing one just skips ahead.
+  const videoReset = useCallback(() => {
+    vidGenRef.current = -1; vidChunksRef.current = new Map(); vidNextRef.current = 0;
+    vidSlotTsRef.current = new Array(12).fill(0);
+  }, []);
+  const vName = { idx: (room, k) => `vid-${room}-i${k}`, pay: (room, k) => `vid-${room}-p${k}`, init: (room) => `vid-${room}-init` };
+
+  const videoIndexOnce = useCallback(async () => {
+    const cfg = { ...cfgRef.current, room: activeRoomRef.current || cfgRef.current.room };
+    if (!cfg.container || !cfg.room || (!hasNativeCK && !cfg.token)) return;
+    const names = [...Array.from({ length: 12 }, (_, k) => vName.idx(cfg.room, k)), vName.init(cfg.room)];
+    const t0 = Date.now();
+    const recs = await backendLookup(cfg, names);
+    const ms = vidStat.current.idxMs; ms.push(Date.now() - t0); if (ms.length > 8) ms.shift();
+    vidStat.current.aliveAt = Date.now();
+    let ack = lastAckRef.current; const want = [];
+    for (const r of recs) {
+      if (r.name === vName.init(cfg.room)) {
+        try {
+          const j = JSON.parse(r.jpeg);
+          if (j.g > vidGenRef.current) {                       // new encoder generation → reset player with its init
+            vidGenRef.current = j.g; vidChunksRef.current = new Map(); vidNextRef.current = 0;
+            if (videoSinkRef.current) videoSinkRef.current({ t: 'init', g: j.g, d: j.d });
+            pushLog('ok', `video init gen ${j.g}`);
+          }
+        } catch (e) {}
+        continue;
+      }
+      const k = Number(r.name.slice(r.name.lastIndexOf('-i') + 2));
+      if (!(k >= 0 && k < 12)) continue;
+      if (r.w && r.h) screenSzRef.current = { w: r.w, h: r.h };
+      if (r.seq < 0 && -r.seq > ack) ack = -r.seq;
+      if (r.ts > vidSlotTsRef.current[k]) want.push({ k, ts: r.ts });
+    }
+    lastAckRef.current = ack;
+    // keep a lightweight frame object carrying the PC's screen size + ack, so tap-mapping and the local cursor work
+    const sz = screenSzRef.current;
+    if (sz.w && sz.h) setFrame((f) => (f && f.video && f.w === sz.w && f.h === sz.h && f.ack === ack ? f : { jpeg: '', w: sz.w, h: sz.h, ts: Date.now(), ack, video: true, rxAt: Date.now() }));
+    if (want.length && vidFetchRef.current < 2) {
+      vidFetchRef.current++;
+      (async () => {
+        try {
+          const prs = await backendLookup(cfg, want.map((w) => vName.pay(cfg.room, w.k)));
+          for (const r of prs) {
+            const k = Number(r.name.slice(r.name.lastIndexOf('-p') + 2));
+            let j; try { j = JSON.parse(r.jpeg); } catch (e) { continue; }
+            vidSlotTsRef.current[k] = r.ts;
+            vidStat.current.bytes += (j.d || '').length;
+            if (j.g !== vidGenRef.current) continue;
+            let e = vidChunksRef.current.get(j.s); if (!e) { e = { n: j.n, parts: new Map() }; vidChunksRef.current.set(j.s, e); }
+            e.parts.set(j.k, j.d);
+          }
+          // deliver every COMPLETE segment in order; skip a permanently-missing one once a later segment is ready
+          const chunks = vidChunksRef.current;
+          for (;;) {
+            const cur = chunks.get(vidNextRef.current);
+            if (cur && cur.parts.size === cur.n) {
+              let b64 = ''; for (let i = 0; i < cur.n; i++) b64 += cur.parts.get(i) || '';
+              if (videoSinkRef.current) videoSinkRef.current({ t: 'seg', d: b64 });
+              chunks.delete(vidNextRef.current); vidNextRef.current++; vidStat.current.segs++;
+              continue;
+            }
+            // nextSeg not ready: if a strictly-later segment is already complete, we've lost this one → skip to it
+            let nextReady = -1;
+            for (const [s, e] of chunks) { if (s > vidNextRef.current && e.parts.size === e.n && (nextReady < 0 || s < nextReady)) nextReady = s; }
+            if (nextReady >= 0 && chunks.size > 6) { for (const s of [...chunks.keys()]) if (s < nextReady) chunks.delete(s); vidNextRef.current = nextReady; continue; }
+            break;
+          }
+        } catch (e) { pushLog('error', 'video fetch: ' + (e.message || e)); }
+        finally { vidFetchRef.current--; }
+      })();
+    }
+    setStatus('connected');
+  }, [pushLog]);
+
+  const startVideo = useCallback(() => {
+    const token = ++vidTokenRef.current;
+    const alive = () => vidTokenRef.current === token;
+    vidStat.current = { segs: 0, bytes: 0, idxMs: [], aliveAt: 0, t0: Date.now() };
+    (async () => {
+      let errs = 0;
+      while (alive()) {
+        const t0 = Date.now();
+        try { await videoIndexOnce(); errs = 0; }
+        catch (e) { errs++; if (errs >= 3) fail(e.message || e); }
+        await new Promise((res) => setTimeout(res, Math.max(90, 220 - (Date.now() - t0))));
+      }
+    })();
+    const hud = () => {
+      if (!alive()) return;
+      const s = vidStat.current, dt = Math.max(0.5, (Date.now() - s.t0) / 1000), ms = s.idxMs.slice().sort((a, b) => a - b);
+      setVideoInfo((v) => ({ ...v, fps: Math.round((s.segs / dt) * 10) / 10, kbs: Math.round(s.bytes / 1024 / dt), rtt: ms.length ? ms[ms.length >> 1] : 0, aliveAt: s.aliveAt }));
+      s.segs = 0; s.bytes = 0; s.t0 = Date.now();
+      setTimeout(hud, 1000);
+    };
+    hud();
+  }, [videoIndexOnce, fail]);
+  const stopVideo = useCallback(() => { vidTokenRef.current++; }, []);
+
   useEffect(() => { pollFrameRef.current = pollFrame; }, [pollFrame]);
   useEffect(() => { connectedRef.current = connected; }, [connected]);
 
@@ -478,14 +593,19 @@ export function useICloudRemote(activeRoom, enabled = true, turbo = false) {
   const connect = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current);
     if (keepRef.current) clearInterval(keepRef.current);
-    stopTurbo();
+    stopTurbo(); stopVideo();
     liveRef.current = false;
     bufRef.current = []; lastTsRef.current = 0; lastAckRef.current = 0;   // fresh buffer each connect
-    turboReset();
+    turboReset(); videoReset();
     const c = { ...cfgRef.current, room: activeRoomRef.current || cfgRef.current.room };
     setConnected(true); setStatus('connecting…');
-    pushLog('info', `connecting · ${turboRef.current ? 'TURBO · ' : ''}${hasNativeCK ? 'native' : 'web'} · env ${c.env} · room ${c.room}`);
-    if (turboRef.current) {
+    const kind = videoRef.current ? 'VIDEO' : turboRef.current ? 'TURBO' : 'classic';
+    pushLog('info', `connecting · ${kind} · ${hasNativeCK ? 'native' : 'web'} · env ${c.env} · room ${c.room}`);
+    if (videoRef.current) {
+      sendCmd('video', { text: 'on' });                        // ask the PC for the H.264 encoder
+      sendCmd('vq', { text: String(c.videoQ || 0) });
+      startVideo();
+    } else if (turboRef.current) {
       sendCmd('turbo', { text: 'on' });                        // ask the PC for the delta-tile engine
       sendCmd('tq', { text: String(c.turboQ || 0) });
       sendCmd('tr');                                           // …and a fresh whole-screen preview to start from
@@ -493,7 +613,7 @@ export function useICloudRemote(activeRoom, enabled = true, turbo = false) {
     } else {
       pollFrame();
       sendCmd('shot');
-      if (c.room !== 'WEB') sendCmd('turbo', { text: 'off' });  // a bridge left in Turbo goes back to the classic ring
+      if (c.room !== 'WEB') { sendCmd('turbo', { text: 'off' }); sendCmd('video', { text: 'off' }); }  // a bridge left in Turbo/Video goes back to the classic ring
       sendCmd('pack', { text: c.packing ? 'on' : 'off' });   // restore the frame-packing preference on the PC
       pollRef.current = setInterval(pollFrame, 700);   // one lookup of the whole ring per tick (don't flood)
     }
@@ -505,6 +625,10 @@ export function useICloudRemote(activeRoom, enabled = true, turbo = false) {
     keepRef.current = setInterval(() => {
       const c = cfgRef.current;
       if (!(hasNativeCK || c.webAuthToken)) return;
+      if (videoRef.current) {                                   // keep the PC's "viewer active" flag warm (idempotent 'video on')
+        if (Date.now() - lastKeepRef.current > 12000) { lastKeepRef.current = Date.now(); sendCmd('video', { text: 'on' }); }
+        return;
+      }
       if (turboRef.current) {                                   // Turbo is silent on a still screen — only keep the PC's "viewer active" flag warm
         if (Date.now() - lastKeepRef.current > 14000) { lastKeepRef.current = Date.now(); sendCmd('shot'); }
         return;
@@ -516,14 +640,15 @@ export function useICloudRemote(activeRoom, enabled = true, turbo = false) {
         sendCmd('shot');
       }
     }, 1500);
-  }, [pollFrame, sendCmd, pushLog, stopTurbo, startTurbo, turboReset]);
+  }, [pollFrame, sendCmd, pushLog, stopTurbo, startTurbo, turboReset, stopVideo, startVideo, videoReset]);
 
   const disconnect = useCallback(() => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     if (keepRef.current) { clearInterval(keepRef.current); keepRef.current = null; }
-    stopTurbo();
+    stopTurbo(); stopVideo();
+    if (videoRef.current) sendCmdRef.current('video', { text: 'off', room: cfgRef.current.room });   // stop the PC encoder promptly
     setConnected(false); setStatus(''); pushLog('info', 'disconnected');
-  }, [pushLog, stopTurbo]);
+  }, [pushLog, stopTurbo, stopVideo]);
 
   // auto-connect on open when pre-configured AND this transport is active (enabled). When the user
   // switches to another transport (e.g. the Azure tab) this hook is disabled, so it disconnects and
@@ -547,41 +672,49 @@ export function useICloudRemote(activeRoom, enabled = true, turbo = false) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRoom]);
 
-  // Computer <-> Turbo on a live connection: swap the reader without dropping the link. (Declared AFTER the room
-  // effect above so activeRoomRef is already current when commands go out.)
+  // Swap the reader (classic ⇄ Turbo ⇄ Video) on a live connection without dropping the link. (Declared AFTER
+  // the room effect above so activeRoomRef is current when commands go out.)
   useEffect(() => {
-    const was = turboRef.current, now = !!turbo;
-    turboRef.current = now;
-    if (was === now || !connectedRef.current) return;
+    const wasT = turboRef.current, wasV = videoRef.current;
+    turboRef.current = !!turbo; videoRef.current = !!video;
+    if (wasT === !!turbo && wasV === !!video) return;
+    if (!connectedRef.current) return;
+    // tear down whatever was running
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-    stopTurbo(); turboReset();
+    stopTurbo(); turboReset(); stopVideo(); videoReset();
+    if (wasV && !video) sendCmdRef.current('video', { text: 'off', room: cfgRef.current.room });   // leaving video → stop the PC encoder
     bufRef.current = []; lastTsRef.current = 0; liveRef.current = false;
     setFrame(null); setStatus('switching…');
-    if (now) {
+    if (video) {
+      sendCmdRef.current('video', { text: 'on' });
+      sendCmdRef.current('vq', { text: String(cfgRef.current.videoQ || 0) });
+      startVideo();
+    } else if (turbo) {
       sendCmdRef.current('turbo', { text: 'on' });
       sendCmdRef.current('tq', { text: String(cfgRef.current.turboQ || 0) });
       sendCmdRef.current('tr');
       startTurbo();
     } else {
-      sendCmdRef.current('turbo', { text: 'off', room: cfgRef.current.room });   // always to the PC's room, even if we're heading to the Web tab
+      sendCmdRef.current('turbo', { text: 'off', room: cfgRef.current.room });
       if ((activeRoomRef.current || cfgRef.current.room) !== 'WEB') pollFrameRef.current();
       sendCmdRef.current('shot');
       pollRef.current = setInterval(() => pollFrameRef.current(), 700);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turbo]);
+  }, [turbo, video]);
 
   useEffect(() => () => {
     if (pollRef.current) clearInterval(pollRef.current);
     if (keepRef.current) clearInterval(keepRef.current);
-    turboTokenRef.current++;
+    turboTokenRef.current++; vidTokenRef.current++;
   }, []);
 
   return {
     cfg, loaded, connected, status, frame, authUrl,
     native: hasNativeCK, signedIn: hasNativeCK || !!cfg.webAuthToken,
     turbo: !!turbo, turboView, turboInfo,
-    repaint: () => sendCmd('tr'),
+    video: !!video, videoSinkRef, videoInfo, setVideoStat: setVideoInfo,
+    repaint: () => sendCmd(videoRef.current ? 'vr' : 'tr'),
     setCfg, connect, disconnect, sendCmd, requestShot: () => sendCmd('shot'),
     beginSignIn, completeSignIn,
     log, clearLog, pushLog,
